@@ -8,40 +8,33 @@ from telegram.ext import (
 )
 
 # =========================
-# SAFE ENV READ
+# ENV VARIABLES
 # =========================
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-SOURCE_CHAT_ID = os.getenv("SOURCE_CHAT_ID")
-TARGET_CHAT_ID = os.getenv("TARGET_CHAT_ID")
+SOURCE_CHAT_ID = int(os.getenv("SOURCE_CHAT_ID"))
+TARGET_CHAT_ID = int(os.getenv("TARGET_CHAT_ID"))
 
-# =========================
-# HARD FAIL WITH MESSAGE
-# =========================
-if not BOT_TOKEN:
-    raise RuntimeError("❌ TELEGRAM_BOT_TOKEN is missing in Railway variables")
-
-if not SOURCE_CHAT_ID:
-    raise RuntimeError("❌ SOURCE_CHAT_ID is missing in Railway variables")
-
-if not TARGET_CHAT_ID:
-    raise RuntimeError("❌ TARGET_CHAT_ID is missing in Railway variables")
-
-SOURCE_CHAT_ID = int(SOURCE_CHAT_ID)
-TARGET_CHAT_ID = int(TARGET_CHAT_ID)
-
-print("✅ ENV LOADED")
+print("✅ BOT STARTING")
 print("SOURCE_CHAT_ID =", SOURCE_CHAT_ID)
 print("TARGET_CHAT_ID =", TARGET_CHAT_ID)
 
-
 # =========================
-# HANDLER
+# HANDLER (ONE-WAY ONLY)
 # =========================
 async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    # Ignore anything that is NOT a channel post
     if not update.channel_post:
         return
 
-    if update.channel_post.chat.id != SOURCE_CHAT_ID:
+    chat_id = update.channel_post.chat.id
+
+    # 🚫 HARD BLOCK: ignore TARGET channel completely
+    if chat_id == TARGET_CHAT_ID:
+        return
+
+    # ✅ ALLOW ONLY SOURCE channel
+    if chat_id != SOURCE_CHAT_ID:
         return
 
     text = update.channel_post.text
@@ -53,7 +46,6 @@ async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text=text
     )
 
-
 # =========================
 # APP START
 # =========================
@@ -64,9 +56,8 @@ def main():
         MessageHandler(filters.ChatType.CHANNEL, forward_message)
     )
 
-    print("🚀 BOT STARTED – LISTENING FOR CHANNEL POSTS")
+    print("🚀 BOT RUNNING (ONE-WAY MODE)")
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
