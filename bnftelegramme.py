@@ -1,5 +1,4 @@
 import os
-import asyncio
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -11,27 +10,26 @@ from telegram.ext import (
 # =========================
 # ENV VARIABLES (Railway)
 # =========================
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-SOURCE_CHAT_ID = int(os.getenv("SOURCE_CHAT_ID"))
-TARGET_CHAT_ID = int(os.getenv("TARGET_CHAT_ID"))
+BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 
-if not BOT_TOKEN or not SOURCE_CHAT_ID or not TARGET_CHAT_ID:
-    raise ValueError("Missing required environment variables")
+# SOURCE: GDFL_RAW_ALERTS
+SOURCE_CHAT_ID = int(os.environ["SOURCE_CHAT_ID"])
+
+# TARGET: BNF_1MIN_AI_ALERTS
+TARGET_CHAT_ID = int(os.environ["TARGET_CHAT_ID"])
+
 
 # =========================
-# MESSAGE HANDLER
+# HANDLER
 # =========================
 async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message:
+    if not update.channel_post:
         return
 
-    chat_id = update.message.chat.id
-
-    # Only listen to SOURCE channel
-    if chat_id != SOURCE_CHAT_ID:
+    if update.channel_post.chat.id != SOURCE_CHAT_ID:
         return
 
-    text = update.message.text
+    text = update.channel_post.text
     if not text:
         return
 
@@ -40,18 +38,20 @@ async def forward_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text=text
     )
 
+
 # =========================
-# MAIN APP
+# APP START
 # =========================
-async def main():
+def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, forward_message)
+        MessageHandler(filters.ChatType.CHANNEL, forward_message)
     )
 
-    print("✅ Bot started. Listening for messages...")
-    await app.run_polling()
+    print("✅ Telegram Forward Bot is RUNNING")
+    app.run_polling()
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
