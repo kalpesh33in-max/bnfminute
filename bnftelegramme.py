@@ -8,15 +8,30 @@ from telegram.ext import (
 )
 
 # =========================
-# ENV VARIABLES (Railway)
+# SAFE ENV READ
 # =========================
-BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+SOURCE_CHAT_ID = os.getenv("SOURCE_CHAT_ID")
+TARGET_CHAT_ID = os.getenv("TARGET_CHAT_ID")
 
-# SOURCE: GDFL_RAW_ALERTS
-SOURCE_CHAT_ID = int(os.environ["SOURCE_CHAT_ID"])
+# =========================
+# HARD FAIL WITH MESSAGE
+# =========================
+if not BOT_TOKEN:
+    raise RuntimeError("❌ TELEGRAM_BOT_TOKEN is missing in Railway variables")
 
-# TARGET: BNF_1MIN_AI_ALERTS
-TARGET_CHAT_ID = int(os.environ["TARGET_CHAT_ID"])
+if not SOURCE_CHAT_ID:
+    raise RuntimeError("❌ SOURCE_CHAT_ID is missing in Railway variables")
+
+if not TARGET_CHAT_ID:
+    raise RuntimeError("❌ TARGET_CHAT_ID is missing in Railway variables")
+
+SOURCE_CHAT_ID = int(SOURCE_CHAT_ID)
+TARGET_CHAT_ID = int(TARGET_CHAT_ID)
+
+print("✅ ENV LOADED")
+print("SOURCE_CHAT_ID =", SOURCE_CHAT_ID)
+print("TARGET_CHAT_ID =", TARGET_CHAT_ID)
 
 
 # =========================
@@ -49,7 +64,7 @@ def main():
         MessageHandler(filters.ChatType.CHANNEL, forward_message)
     )
 
-    print("✅ Telegram Forward Bot is RUNNING")
+    print("🚀 BOT STARTED – LISTENING FOR CHANNEL POSTS")
     app.run_polling()
 
 
