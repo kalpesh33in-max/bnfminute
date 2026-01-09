@@ -1,217 +1,117 @@
 import os
-import re
-import time
-from collections import defaultdict, deque
-from telegram import Bot
+import asyncio
+from datetime import datetime, timedelta
+from collections import deque
+
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 # =========================
-# ENV VARIABLES
+# ENV VARIABLES (Railway)
 # =========================
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 SOURCE_CHAT_ID = int(os.getenv("SOURCE_CHAT_ID"))
 TARGET_CHAT_ID = int(os.getenv("TARGET_CHAT_ID"))
 
-bot = Bot(token=BOT_TOKEN)
+if not BOT_TOKEN or not SOURCE_CHAT_ID or not TARGET_CHAT_ID:
+    raise RuntimeError("Missing TELEGRAM_BOT_TOKEN / SOURCE_CHAT_ID / TARGET_CHAT_ID")
 
 # =========================
-# STORAGE
+# STORAGE (1-minute buffer)
 # =========================
-bucket = defaultdict(list)            # 1-minute bucket
-score_history = defaultdict(lambda: deque(maxlen=3))
-last_eval_time = int(time.time())
-
-# =========================
-# REGEX PATTERNS (YOUR FORMAT)
-# =========================
-OPTION_PATTERN = re.compile(
-    r"(?P<symbol>[A-Z]+).*?"
-    r"(?P<strike>\d+)(?P<type>CE|PE).*?"
-    r"(?P<money>ITM|ATM|OTM).*?"
-    r"ACTION:\s(?P<action>SHORT COVERING|LONG UNWINDING|LONG BUILD-UP|OPTION WRITING|BUYERS DOMINANT).*?"
-    r"SIZE:\s(?P<size>LOW|MEDIUM|HIGH|EXTREME|VERY HIGH)",
-    re.S
-)
-
-FUTURE_PRICE_PATTERN = re.compile(
-    r"(?P<symbol>[A-Z]+).*?FUTURE.*?(?P<direction>↑|↓|↔)",
-    re.S
-)
+buffer = deque()
+current_minute = None
 
 # =========================
-# SCORING TABLES
+# SIMPLE INTERPRETATION LOGIC
 # =========================
-SIZE_SCORE = {
-    "EXTREME": 1.0,
-    "VERY HIGH": 1.0,
-    "HIGH": 0.5,
-    "MEDIUM": 0.0,
-    "LOW": 0.0
-}
+def interpret_messages(messages: list[str]) -> str:
+    if not messages:
+        return ""
 
-ACTION_SCORE = {
-    "SHORT COVERING": 1.0,
-    "LONG BUILD-UP": 1.0,
-    "BUYERS DOMINANT": 1.0,
-    "OPTION WRITING": 0.5,
-    "LONG UNWINDING": 0.5
-}
+    text = "\n".join(messages)
 
-# =========================
-# PARSER
-# =========================
-def parse_message(text):
-    opt = OPTION_PATTERN.search(text)
-    fut = FUTURE_PRICE_PATTERN.search(text)
+    bullish = sum("PRICE: ↑" in m or "LONG" in m for m in messages)
+    bearish = sum("PRICE: ↓" in m or "SHORT" in m for m in messages)
 
-    if opt:
-        return {
-            "symbol": opt.group("symbol"),
-            "instrument": opt.group("type"),
-            "money": opt.group("money"),
-            "action": opt.group("action"),
-            "size": opt.group("size")
-        }
+    if bullish > bearish:
+        mood = "📈 TREND BULLISH"
+    elif bearish > bullish:
+        mood = "📉 TREND BEARISH"
+    else:
+        mood = "⚠️ SIDEWAYS / MIXED"
 
-    if fut:
-        return {
-            "symbol": fut.group("symbol"),
-            "instrument": "FUT",
-            "direction": fut.group("direction")
-        }
+    return f"""
+🧠 **BNF 1-MIN AI SUMMARY**
+⏱ Time: {datetime.now().strftime('%H:%M')}
 
-    return None
+Total Signals: {len(messages)}
+Bullish: {bullish}
+Bearish: {bearish}
+
+{mood}
+""".strip()
+
 
 # =========================
-# EVALUATION LOGIC
+# MESSAGE HANDLER
 # =========================
-def evaluate(symbol, data):
-    score = 0
-    future_bias = "NEUTRAL"
+async def on_channel_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global current_minute
 
-    itm_ce_strength = 0
-    itm_pe_strength = 0
-    itm_ce_unwind = 0
-    itm_pe_unwind = 0
+    if not update.channel_post:
+        return
 
-    for item in data:
-        # FUTURE PRICE
-        if item["instrument"] == "FUT":
-            if item["direction"] == "↑":
-                future_bias = "BULLISH"
-                score += 2
-            elif item["direction"] == "↓":
-                future_bias = "BEARISH"
-                score += 2
-            else:
-                future_bias = "NEUTRAL"
+    chat_id = update.channel_post.chat_id
+    if chat_id != SOURCE_CHAT_ID:
+        return
 
-        # OPTIONS
-        else:
-            if item["money"] == "ITM":
-                score += SIZE_SCORE.get(item["size"], 0)
-                score += ACTION_SCORE.get(item["action"], 0)
+    msg_text = update.channel_post.text
+    if not msg_text:
+        return
 
-                if item["instrument"] == "CE":
-                    if item["action"] in ["SHORT COVERING", "LONG BUILD-UP", "BUYERS DOMINANT"]:
-                        itm_ce_strength += 1
-                    if item["action"] == "LONG UNWINDING":
-                        itm_ce_unwind += 1
+    now_minute = datetime.now().replace(second=0, microsecond=0)
 
-                if item["instrument"] == "PE":
-                    if item["action"] in ["SHORT COVERING", "LONG BUILD-UP", "BUYERS DOMINANT"]:
-                        itm_pe_strength += 1
-                    if item["action"] == "LONG UNWINDING":
-                        itm_pe_unwind += 1
+    if current_minute is None:
+        current_minute = now_minute
 
-    # =====================
-    # TREND DECISION
-    # =====================
-    trend = "NO TRADE"
+    # If minute changes → send summary
+    if now_minute > current_minute:
+        summary = interpret_messages(list(buffer))
+        if summary:
+            await context.bot.send_message(
+                chat_id=TARGET_CHAT_ID,
+                text=summary,
+                parse_mode="Markdown",
+            )
 
-    if future_bias == "BULLISH" and itm_ce_strength >= 2:
-        trend = "BULLISH"
+        buffer.clear()
+        current_minute = now_minute
 
-    if future_bias == "BEARISH" and itm_pe_strength >= 2:
-        trend = "BEARISH"
+    buffer.append(msg_text)
 
-    # =====================
-    # 📉 REVERSAL WARNING
-    # =====================
-    reversal = False
-
-    if future_bias == "BULLISH" and itm_ce_unwind >= 2:
-        reversal = True
-
-    if future_bias == "BEARISH" and itm_pe_unwind >= 2:
-        reversal = True
-
-    # Score collapse check
-    history = score_history[symbol]
-    if history and history[-1] >= 5 and score <= 3:
-        reversal = True
-
-    score_history[symbol].append(score)
-
-    return trend, score, reversal
 
 # =========================
-# EMOJI MAPPER
+# MAIN
 # =========================
-def trend_emoji(score, reversal):
-    if reversal:
-        return "📉⚠️"
-    if score >= 5:
-        return "🚀🔥"
-    if score >= 3:
-        return "🟢🟡"
-    return "⚪"
+async def main():
+    print("🚀 BNF Minute AI Scanner Started")
+    print(f"Listening SOURCE_CHAT_ID: {SOURCE_CHAT_ID}")
+    print(f"Sending to TARGET_CHAT_ID: {TARGET_CHAT_ID}")
 
-# =========================
-# MAIN LOOP
-# =========================
-def run():
-    global last_eval_time
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    while True:
-        updates = bot.get_updates(timeout=10)
+    app.add_handler(
+        MessageHandler(filters.ChatType.CHANNEL, on_channel_message)
+    )
 
-        for update in updates:
-            if not update.message:
-                continue
-            if update.message.chat.id != SOURCE_CHAT_ID:
-                continue
+    await app.run_polling()
 
-            parsed = parse_message(update.message.text)
-            if parsed:
-                bucket[parsed["symbol"]].append(parsed)
 
-        now = int(time.time())
-
-        if now - last_eval_time >= 60:
-            for symbol, data in bucket.items():
-                trend, score, reversal = evaluate(symbol, data)
-
-                if score >= 3 and trend != "NO TRADE":
-                    msg = (
-                        f"{trend_emoji(score, reversal)} {symbol} – {trend}\n"
-                        f"Confidence Score: {round(score,1)}\n\n"
-                        f"Logic:\n"
-                        f"• Future price confirmed\n"
-                        f"• ITM option participation\n"
-                    )
-
-                    if reversal:
-                        msg += "\n⚠️ Reversal Risk: Trail / Book profit"
-
-                    bot.send_message(chat_id=TARGET_CHAT_ID, text=msg)
-
-            bucket.clear()
-            last_eval_time = now
-
-        time.sleep(5)
-
-# =========================
-# START
-# =========================
 if __name__ == "__main__":
-    run()
+    asyncio.run(main())
