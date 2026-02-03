@@ -3,6 +3,8 @@ import asyncio
 from datetime import datetime
 from collections import defaultdict
 import logging
+import re
+from zoneinfo import ZoneInfo
 
 from telegram import Update
 from telegram.ext import (
@@ -29,148 +31,192 @@ try:
     BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
     SOURCE_CHAT_ID = int(os.environ["SOURCE_CHAT_ID"])
     TARGET_CHAT_ID = int(os.environ["TARGET_CHAT_ID"])
-    # Optional: set a different aggregation interval in seconds
     AGGREGATION_INTERVAL_SECONDS = int(os.getenv("AGGREGATION_INTERVAL", 60))
 except (KeyError, ValueError) as e:
     logger.critical(f"❌ Critical Error: Environment variable {e} is not set or invalid.")
     raise SystemExit(f"Stopping bot. Please set a valid {e} environment variable.")
 
-# This buffer will store messages. It's a simple list protected by a lock.
-# The format will be a list of strings: ["message1", "message2", ...]
 MESSAGE_BUFFER = []
 BUFFER_LOCK = asyncio.Lock()
 
 # =========================
 # MESSAGE SUMMARIZER
-# (Inspired by lalo.py)
 # =========================
 def summarize_alerts(alerts: list[str]) -> str:
-    """Parses a list of alert messages and creates a single summary message."""
+    logger.info(f"Summarizer received {len(alerts)} alerts to process.")
     if not alerts:
-        return "" # Return empty string if there's nothing to report
+        return "No actionable alerts detected in the last interval."
 
-    total_alerts = len(alerts)
-    bullish_signals = 0
-    bearish_signals = 0
-    
-    # Keyword-based analysis
+    aggregated_data = defaultdict(lambda: {
+        "actions": defaultdict(lambda: {'CE': 0, 'PE': 0}),
+        "future_prices": [],
+    })
+
+    # Corrected regex patterns
+    patterns = {
+        "symbol": re.compile(r"^([\w\s]+)\s*||"), # Made this greedy to capture full name
+        "action": re.compile(r"ACTION:\s*([\w\(\)-]+)"),
+        "lots": re.compile(r"\((\d+)\s*lots\)"),
+        "option_type": re.compile(r"STRIKE:\s*\d+(CE|PE)"),
+        "future_price": re.compile(r"FUTURE PRICE:\s*([\d\.]+)"),
+    }
+
     for alert in alerts:
-        # Simple check for keywords indicating bullish or bearish sentiment
-        if "PRICE: ↑" in alert or "LONG" in alert or "BUYING" in alert:
-            bullish_signals += 1
-        elif "PRICE: ↓" in alert or "SHORT" in alert or "WRITING" in alert or "UNWINDING" in alert:
-            bearish_signals += 1
+        try:
+            symbol_match = patterns["symbol"].search(alert)
+            action_match = patterns["action"].search(alert)
+            lots_match = patterns["lots"].search(alert)
+            option_type_match = patterns["option_type"].search(alert)
+            future_price_match = patterns["future_price"].search(alert)
+            
+            if all([symbol_match, action_match, lots_match, option_type_match, future_price_match]):
+                symbol = symbol_match.group(1).strip()
+                if symbol == "ICICI": symbol = "ICICIBANK"
+                action = action_match.group(1)
+                lots = int(lots_match.group(1))
+                option_type = option_type_match.group(1)
+                future_price = float(future_price_match.group(1))
 
-    # Determine overall market mood
-    if bullish_signals > bearish_signals:
-        mood = "📈 Trend is Bullish"
-    elif bearish_signals > bullish_signals:
-        mood = "📉 Trend is Bearish"
-    else:
-        mood = "⚠️ Market is Sideways or Mixed"
+                data = aggregated_data[symbol]
+                data["actions"][action][option_type] += lots
+                if future_price > 0:
+                    data["future_prices"].append(future_price)
+            else:
+                logger.warning(f"Failed to parse alert. Some fields were missing in: {alert[:70]}...")
+        except Exception as e:
+            logger.critical(f"!!!!!! UNEXPECTED ERROR DURING ALERT PARSING: {e}. Alert text: {alert[:70]}...", exc_info=True)
+            continue
+    
+    final_summary_parts = []
+    sorted_symbols = sorted(aggregated_data.keys())
 
-    # Format the final summary message
-    now_formatted = datetime.now().strftime('%I:%M %p %d-%b-%Y')
-    summary_header = f"**BNF 1-Minute Market Pulse**\n_{now_formatted}_\n\n"
-    summary_body = (
-        f"**Analysis:**\n"
-        f" • Total Signals: {total_alerts}\n"
-        f" • Bullish Signals: {bullish_signals}\n"
-        f" • Bearish Signals: {bearish_signals}\n\n"
-        f"**Conclusion:** {mood}"
-    )
-    
-    # You can also include the raw alerts if you want, but it might get long.
-    # To include them, you could uncomment the following lines:
-    # raw_alerts_str = "\n\n---".join(alerts)
-    # return f"{summary_header}{summary_body}\n\n--- Raw Alerts ---\n{raw_alerts_str}"
-    
-    return f"{summary_header}{summary_body}"
+    # Mapping for descriptive action names
+    action_name_map = {
+        "BUYER(LONG)": "Long Buildup",
+        "WRITER(SHORT)": "Short Buildup",
+        "REMOVE FROM LONG": "Long Unwinding",
+        "REMOVE FROM SHORT": "Short Covering",
+        "HEDGING": "Hedging",
+        "REMOVE FROM HEDGE": "Hedge Removal"
+    }
+
+    for symbol in sorted_symbols:
+        data = aggregated_data[symbol]
+        actions = data["actions"]
+        prices = data["future_prices"]
+        if not actions or not prices: continue
+        
+        # Feature 1: More Accurate Price Direction
+        first_price = prices[0]
+        last_price = prices[-1]
+        
+        price_arrow = "↔"
+        if last_price > first_price:
+            price_arrow = "↑"
+        elif last_price < first_price:
+            price_arrow = "↓"
+
+        header_line = f"SYMBOL: {symbol:<12} FUTURE PRICE: {last_price:.2f} {price_arrow}"
+
+        # Feature 2: Trading Signal
+        bullish_score = actions["BUYER(LONG)"].get('CE', 0) + actions["WRITER(SHORT)"].get('PE', 0)
+        bearish_score = actions["BUYER(LONG)"].get('PE', 0) + actions["WRITER(SHORT)"].get('CE', 0)
+        
+        signal = "Signal: Neutral"
+        signal_threshold = 100 
+
+        if bullish_score > bearish_score and bullish_score > signal_threshold:
+            signal = "Signal: Buy CE"
+        elif bearish_score > bullish_score and bearish_score > signal_threshold:
+            signal = "Signal: Buy PE"
+        
+        signal_line = signal
+
+        table_lines = [
+            f"{{'ACTION':<19}} {{'CE LOTS':<10}} {{'PE LOTS':<10}}",
+            f"{{'-'*19:<19}} {{'-'*10:<10}} {{'-'*10:<10}}"
+        ]
+        
+        action_order = ["BUYER(LONG)", "WRITER(SHORT)", "REMOVE FROM LONG", "REMOVE FROM SHORT", "HEDGING", "REMOVE FROM HEDGE"]
+        has_actions = False
+        for action_key in action_order:
+            if action_key in actions:
+                ce_lots = actions[action_key].get('CE', 0)
+                pe_lots = actions[action_key].get('PE', 0)
+                if ce_lots > 0 or pe_lots > 0:
+                    display_name = action_name_map.get(action_key, action_key)
+                    table_lines.append(f"{display_name:<19} {ce_lots:<10} {pe_lots:<10}")
+                    has_actions = True
+        if has_actions:
+            symbol_summary = f"{header_line}\n{signal_line}\n" + "\n".join(table_lines)
+            final_summary_parts.append(symbol_summary)
+
+    if not final_summary_parts:
+        return "No actionable alerts detected in the last interval."
+
+    report_body = "\n\n".join(final_summary_parts)
+    return f"```\n{report_body}\n```"
 
 # =========================
 # TELEGRAM BOT HANDLERS
 # =========================
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles incoming messages and adds them to the buffer if they are from the source chat."""
-    # We only care about channel posts from the specific source channel
-    if not update.channel_post or update.channel_post.chat_id != SOURCE_CHAT_ID:
+    if not update.channel_post or update.channel_post.chat.id != SOURCE_CHAT_ID:
         return
-
+    
     message_text = update.channel_post.text
     if message_text:
         async with BUFFER_LOCK:
             MESSAGE_BUFFER.append(message_text)
-        logger.info(f"Buffered 1 message from {SOURCE_CHAT_ID}")
+        logger.info(f"Buffered 1 message from {SOURCE_CHAT_ID}.")
 
 async def aggregation_task(app: Application):
-    """The background task that runs every X seconds to process the buffer."""
-    logger.info("Aggregation task started. Will process buffer every %d seconds.", AGGREGATION_INTERVAL_SECONDS)
-    while True:
-        await asyncio.sleep(AGGREGATION_INTERVAL_SECONDS)
-        
-        alerts_to_process = []
-        async with BUFFER_LOCK:
-            if MESSAGE_BUFFER:
-                # Copy messages from the buffer and clear it
-                alerts_to_process.extend(MESSAGE_BUFFER)
-                MESSAGE_BUFFER.clear()
+    try:
+        await app.bot.send_message(TARGET_CHAT_ID, "✅ Final Aggregator Bot (v10) is LIVE. Aggregation task started.")
+    except TelegramError as e:
+        logger.warning(f"Could not send startup message from aggregation_task: {e}")
 
-        if alerts_to_process:
-            logger.info(f"Processing {len(alerts_to_process)} alerts from buffer.")
-            summary_message = summarize_alerts(alerts_to_process)
+    while True:
+        try:
+            await asyncio.sleep(AGGREGATION_INTERVAL_SECONDS)
             
-            if summary_message:
+            alerts_to_process = []
+            async with BUFFER_LOCK:
+                if MESSAGE_BUFFER:
+                    alerts_to_process.extend(MESSAGE_BUFFER)
+                    MESSAGE_BUFFER.clear()
+
+            if alerts_to_process:
+                logger.info(f"Processing {len(alerts_to_process)} alerts from buffer.")
+                summary_message = summarize_alerts(alerts_to_process)
                 try:
-                    await app.bot.send_message(
-                        chat_id=TARGET_CHAT_ID,
-                        text=summary_message,
-                        parse_mode="Markdown"
-                    )
+                    await app.bot.send_message(chat_id=TARGET_CHAT_ID, text=summary_message, parse_mode="Markdown")
                     logger.info(f"Summary sent to {TARGET_CHAT_ID} successfully.")
                 except TelegramError as e:
-                    logger.error(f"Failed to send message to {TARGET_CHAT_ID}: {e}")
-        else:
-            logger.info("Buffer is empty. Nothing to send.")
+                    logger.error(f"Failed to send summary message: {e}")
+            else:
+                logger.info("Buffer is empty. Nothing to send.")
+        except Exception as e:
+            logger.critical(f"!!!!!! UNEXPECTED ERROR IN AGGREGATION TASK: {e} !!!!!!", exc_info=True)
+
 
 async def post_start(app: Application):
-    """A function to run after the bot has been initialized."""
-    # Start the background aggregation task
     asyncio.create_task(aggregation_task(app))
-    
-    # Send a startup message
-    startup_message = "✅ Aggregator Bot is LIVE.\n\nListening for alerts..."
-    try:
-        await app.bot.send_message(TARGET_CHAT_ID, startup_message)
-    except TelegramError as e:
-        logger.warning(f"Could not send startup message to {TARGET_CHAT_ID}. "
-                       f"Please ensure the bot is an admin in the target channel. Error: {e}")
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error(f"Update {update} caused error {context.error}", exc_info=True)
 
 # =========================
-# MAIN APPLICATION SETUP
+# MAIN
 # =========================
 def main():
-    """Sets up and runs the Telegram bot."""
-    logger.info("🚀 Starting Aggregator Bot...")
-    logger.info(f"Source Channel ID: {SOURCE_CHAT_ID}")
-    logger.info(f"Target Channel ID: {TARGET_CHAT_ID}")
-    logger.info(f"Aggregation Interval: {AGGREGATION_INTERVAL_SECONDS} seconds")
-
-    app = (
-        ApplicationBuilder()
-        .token(BOT_TOKEN)
-        .post_init(post_start)
-        .build()
-    )
-
-    # Add the handler for channel messages
-    app.add_handler(MessageHandler(
-        filters.ChatType.CHANNEL,
-        message_handler
-    ))
-
-    # Start polling
+    logger.info("🚀 Starting Final Aggregator Bot (v10)...")
+    app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_start).build()
+    
+    app.add_handler(MessageHandler(filters.ALL, message_handler))
+    app.add_error_handler(error_handler)
+    
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
