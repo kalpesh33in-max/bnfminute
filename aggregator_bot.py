@@ -161,14 +161,38 @@ def summarize_alerts(alerts: list[str]) -> str:
 # TELEGRAM BOT HANDLERS
 # =========================
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.channel_post or update.channel_post.chat.id != SOURCE_CHAT_ID:
+    # --- Start of Debugging Code ---
+    chat_id = "N/A"
+    update_type = "Unknown"
+    
+    if update.channel_post:
+        chat_id = update.channel_post.chat.id
+        update_type = "Channel Post"
+        logger.info(f"DEBUG: Received a {update_type} from chat ID: {chat_id}")
+    elif update.message:
+        chat_id = update.message.chat.id
+        update_type = "Regular Message"
+        logger.info(f"DEBUG: Received a {update_type} from chat ID: {chat_id}")
+    else:
+        logger.info("DEBUG: Received an update that was not a channel post or a regular message.")
+        logger.debug(f"Full update object: {update}")
+        return
+
+    # Compare with expected source ID, converting both to string for safe comparison
+    if str(chat_id) != str(SOURCE_CHAT_ID):
+        logger.warning(f"DEBUG: Received message from chat ID {chat_id}, but expected {SOURCE_CHAT_ID}. IGNORING.")
+        return
+    # --- End of Debugging Code ---
+
+    # Original logic continues here if the message is from the correct source
+    if not update.channel_post:
         return
     
     message_text = update.channel_post.text
     if message_text:
         async with BUFFER_LOCK:
             MESSAGE_BUFFER.append(message_text)
-        logger.info(f"Buffered 1 message from {SOURCE_CHAT_ID}.")
+        logger.info(f"Successfully buffered 1 message from source {SOURCE_CHAT_ID}.")
 
 async def aggregation_task(app: Application):
     try:
