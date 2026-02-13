@@ -1,4 +1,3 @@
-    asyncio.run(main())
 import asyncio
 import os
 import re
