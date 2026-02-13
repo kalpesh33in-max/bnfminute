@@ -12,9 +12,9 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # --- CONFIGURATION ---
-BOT_TOKEN = "8520597591:AAE4eDmtssZEloon9UHCnNzYkqaaY8-3Bgw"
-TARGET_CHANNEL_ID = "-1003665271298" 
-SUMMARY_CHAT_ID = "-1003665271298" # Sending back to same channel for trial
+BOT_TOKEN = os.getenv("SUMMARIZER_BOT_TOKEN", "8537613424:AAFw7FN2KGIncULsgjuv_r3jF50XizfLcuM")
+TARGET_CHANNEL_ID = os.getenv("TARGET_CHANNEL_ID", "-1003665271298") 
+SUMMARY_CHAT_ID = os.getenv("SUMMARY_CHAT_ID", "-1003665271298") 
 
 # --- STATE ---
 alerts_buffer = []
