@@ -1,7 +1,14 @@
-python-telegram-bot==21.1
+
+# Essential for Telegram Bot and JobQueue (scheduling)
+python-telegram-bot[job-queue]==21.1
+
+# Timezone support (required by APScheduler)
 pytz
-websockets
-nsepython
-pandas
-requests
-aiohttp
+
+# Async networking (required for polling)
+httpx
+
+# Clean-up: Only include these if you use them in other files
+# pandas
+# requests
+# nsepython
