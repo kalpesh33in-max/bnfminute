@@ -77,7 +77,8 @@ async def main():
     await application.initialize()
 
     # 3. Add handlers and jobs AFTER initialization
-    application.add_handler(MessageHandler(filters.Chat(chat_id=int(TARGET_CHANNEL_ID)), message_handler))
+    # Use filters.ALL to ensure we see channel posts, and check ID inside the handler
+    application.add_handler(MessageHandler(filters.ALL, message_handler))
     if application.job_queue:
         # Reduced interval to 30 seconds for trial
         application.job_queue.run_repeating(process_summary, interval=30, first=5)
