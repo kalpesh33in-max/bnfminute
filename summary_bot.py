@@ -1,15 +1,15 @@
+    asyncio.run(main())
 import asyncio
 import os
 import re
 import logging
+from datetime import datetime
 from collections import defaultdict
+import telegram
 from telegram.ext import Application, MessageHandler, filters
 
-# Setup logging to see results in Railway Deploy Logs
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', 
-    level=logging.INFO
-)
+# Enable logging to see results in Railway
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- CONFIGURATION ---
@@ -20,7 +20,6 @@ SUMMARY_CHAT_ID = os.environ.get("SUMMARY_CHAT_ID")
 # --- STATE ---
 alerts_buffer = []
 
-# --- PARSING LOGIC ---
 def parse_alert(message_text):
     patterns = {
         'action': r"🚨 (.*)",
@@ -35,7 +34,6 @@ def parse_alert(message_text):
             data[key] = match.group(1).strip()
         else:
             return None
-    
     try:
         data['lots'] = int(data['lots'])
         data['oi_change'] = int(data['oi_change'].replace(',', ''))
@@ -44,59 +42,47 @@ def parse_alert(message_text):
         return None
 
 async def message_handler(update, context):
-    # Only process if message is from the target channel
     if update.message and update.message.text and str(update.message.chat_id) == str(TARGET_CHANNEL_ID):
         parsed = parse_alert(update.message.text)
         if parsed:
             alerts_buffer.append(parsed)
-            logger.info(f"Buffered trade: {parsed['symbol']}")
+            logger.info(f"Buffered: {parsed['symbol']}")
 
 async def process_summary(context):
     global alerts_buffer
     if not alerts_buffer:
         return
-    
     current_batch = list(alerts_buffer)
     alerts_buffer.clear()
-    
-    msg = f"📊 **5-Minute Summary** ({len(current_batch)} trades)\n\n"
-    for item in current_batch[:10]: # List top 10 trades
-        msg += f"• {item['symbol']}: {item['lots']} lots\n"
-        
+    msg = f"📊 **5-Minute Summary** ({len(current_batch)} trades)\n" + "\n".join([f"• {a['symbol']}: {a['lots']} lots" for a in current_batch[:5]])
     await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=msg, parse_mode='Markdown')
 
 async def main():
     if not all([BOT_TOKEN, TARGET_CHANNEL_ID, SUMMARY_CHAT_ID]):
-        logger.error("CRITICAL: Missing environment variables (Token, Target ID, or Summary ID).")
+        logger.error("Missing Environment Variables!")
         return
 
-    # 1. Build application without starting it
+    # 1. Build application
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # 2. REQUIRED FOR PYTHON 3.13: Manually initialize before setting up Jobs
-    # This prevents the "weak reference" error by locking the Application in memory.
+    # 2. REQUIRED FOR PYTHON 3.13: Initialize first to fix the weakref error
     await application.initialize()
 
-    # 3. CONFIGURE JobQueue & Handlers AFTER initialization
-    if application.job_queue:
-        # Runs every 300 seconds (5 mins), starts 10 seconds after bot is online
-        application.job_queue.run_repeating(process_summary, interval=300, first=10)
-        logger.info("Summary timer (5m) started.")
-    
-    # Listen only to the specific channel ID
+    # 3. Add handlers and jobs AFTER initialization
     application.add_handler(MessageHandler(filters.Chat(chat_id=int(TARGET_CHANNEL_ID)), message_handler))
+    if application.job_queue:
+        application.job_queue.run_repeating(process_summary, interval=300, first=10)
 
-    # 4. Start the bot components
+    # 4. Start the bot
     await application.start()
     await application.updater.start_polling()
     
-    logger.info("Summarizer Bot is active and running!")
+    logger.info("Bot successfully started on Python 3.13!")
     
-    # Keep the script alive
     try:
         while True:
             await asyncio.sleep(1)
-    except (KeyboardInterrupt, SystemExit):
+    finally:
         await application.stop()
         await application.shutdown()
 
