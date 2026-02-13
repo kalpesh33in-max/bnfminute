@@ -43,15 +43,17 @@ def parse_alert(message_text):
         return None
 
 async def message_handler(update, context):
-    # Log incoming messages for debugging
-    if update.message and update.message.text:
-        logger.info(f"Incoming from {update.message.chat_id}: {update.message.text[:50]}...")
+    # Support both group/private messages and channel posts
+    msg = update.channel_post or update.message
     
-    if update.message and update.message.text and str(update.message.chat_id) == str(TARGET_CHANNEL_ID):
-        parsed = parse_alert(update.message.text)
-        if parsed:
-            alerts_buffer.append(parsed)
-            logger.info(f"Buffered: {parsed['symbol']}")
+    if msg and msg.text:
+        logger.info(f"Incoming from {msg.chat_id}: {msg.text[:50]}...")
+        
+        if str(msg.chat_id) == str(TARGET_CHANNEL_ID):
+            parsed = parse_alert(msg.text)
+            if parsed:
+                alerts_buffer.append(parsed)
+                logger.info(f"Buffered: {parsed['symbol']}")
 
 async def process_summary(context):
     global alerts_buffer
