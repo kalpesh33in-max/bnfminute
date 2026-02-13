@@ -12,9 +12,9 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # --- CONFIGURATION ---
-BOT_TOKEN = os.environ.get("SUMMARIZER_BOT_TOKEN")
-TARGET_CHANNEL_ID = os.environ.get("TARGET_CHANNEL_ID") 
-SUMMARY_CHAT_ID = os.environ.get("SUMMARY_CHAT_ID")   
+BOT_TOKEN = "8520597591:AAE4eDmtssZEloon9UHCnNzYkqaaY8-3Bgw"
+TARGET_CHANNEL_ID = "-1003665271298" 
+SUMMARY_CHAT_ID = "-1003665271298" # Sending back to same channel for trial
 
 # --- STATE ---
 alerts_buffer = []
@@ -35,12 +35,18 @@ def parse_alert(message_text):
             return None
     try:
         data['lots'] = int(data['lots'])
-        data['oi_change'] = int(data['oi_change'].replace(',', ''))
+        # Handle commas and signs in OI CHANGE
+        oi_str = data['oi_change'].replace(',', '').replace('+', '')
+        data['oi_change'] = int(oi_str)
         return data
     except Exception:
         return None
 
 async def message_handler(update, context):
+    # Log incoming messages for debugging
+    if update.message and update.message.text:
+        logger.info(f"Incoming from {update.message.chat_id}: {update.message.text[:50]}...")
+    
     if update.message and update.message.text and str(update.message.chat_id) == str(TARGET_CHANNEL_ID):
         parsed = parse_alert(update.message.text)
         if parsed:
@@ -50,15 +56,16 @@ async def message_handler(update, context):
 async def process_summary(context):
     global alerts_buffer
     if not alerts_buffer:
+        logger.info("Summary job ran, but buffer is empty.")
         return
     current_batch = list(alerts_buffer)
     alerts_buffer.clear()
-    msg = f"📊 **5-Minute Summary** ({len(current_batch)} trades)\n" + "\n".join([f"• {a['symbol']}: {a['lots']} lots" for a in current_batch[:5]])
+    msg = f"📊 **5-Minute Summary** ({len(current_batch)} trades)\n" + "\n".join([f"• {a['symbol']}: {a['lots']} lots" for a in current_batch])
     await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=msg, parse_mode='Markdown')
 
 async def main():
     if not all([BOT_TOKEN, TARGET_CHANNEL_ID, SUMMARY_CHAT_ID]):
-        logger.error("Missing Environment Variables!")
+        logger.error("Missing Configuration!")
         return
 
     # 1. Build application
@@ -70,7 +77,8 @@ async def main():
     # 3. Add handlers and jobs AFTER initialization
     application.add_handler(MessageHandler(filters.Chat(chat_id=int(TARGET_CHANNEL_ID)), message_handler))
     if application.job_queue:
-        application.job_queue.run_repeating(process_summary, interval=300, first=10)
+        # Reduced interval to 30 seconds for trial
+        application.job_queue.run_repeating(process_summary, interval=30, first=5)
 
     # 4. Start the bot
     await application.start()
