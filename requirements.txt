@@ -1,6 +1,5 @@
-python-telegram-bot==21.1
+python-telegram-bot[job-queue]==21.1
 pytz
-websockets
 nsepython
 pandas
 requests
