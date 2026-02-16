@@ -4,11 +4,11 @@ import logging
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
-# Enable logging
+# --- LOGGING ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- CONFIGURATION (Pulls from Railway Variables) ---
+# --- CONFIG (Railway Variables) ---
 BOT_TOKEN = os.getenv("SUMMARIZER_BOT_TOKEN")
 TARGET_CHANNEL_ID = os.getenv("TARGET_CHANNEL_ID") 
 SUMMARY_CHAT_ID = os.getenv("SUMMARY_CHAT_ID") 
@@ -59,31 +59,31 @@ async def process_summary(context: ContextTypes.DEFAULT_TYPE):
     current_batch = list(alerts_buffer)
     alerts_buffer.clear()
     
-    # Simple Trend Calculation
+    # Simple summary logic for stability check
     total_score = sum((a['sentiment'] * a['lots'] * a['weight']) for a in current_batch)
-    trend = "🚀 STRONG BULLISH" if total_score > 1500 else "📈 BULLISH" if total_score > 300 else "🔥 STRONG BEARISH" if total_score < -1500 else "📉 BEARISH" if total_score < -300 else "↔️ NEUTRAL"
+    trend = "📈 BULLISH" if total_score > 300 else "📉 BEARISH" if total_score < -300 else "↔️ NEUTRAL"
     
-    msg = f"📊 **BANK NIFTY MASTER TREND**\nSentiment: **{trend}**\nAlerts: {len(current_batch)}"
+    msg = f"📊 **MARKET TREND SUMMARY**\nSentiment: **{trend}**\nAlerts Processed: {len(current_batch)}"
 
     try:
         await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=msg, parse_mode='Markdown')
-        logger.info("Summary posted.")
+        logger.info("Summary posted to Telegram.")
     except Exception as e:
         logger.error(f"Post failed: {e}")
 
 def main():
-    # builder() followed by run_polling() is the ONLY stable way to avoid the weak reference crash
+    # builder() + run_polling() is the ONLY way to avoid the weak reference crash
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # Add handler for channel alerts
+    # Add handler for alerts
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
 
-    # Start the 5-minute background timer
+    # Set background timer (300 seconds = 5 minutes)
     if application.job_queue:
         application.job_queue.run_repeating(process_summary, interval=300, first=10)
 
-    logger.info("Bot starting in stable mode...")
-    # This method handles all memory and loop management for you
+    logger.info("Bot starting in stable polling mode...")
+    # This method handles memory and loop management automatically
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
