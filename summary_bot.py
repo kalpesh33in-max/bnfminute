@@ -1,6 +1,7 @@
 import os
 import re
 import logging
+from collections import defaultdict
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
@@ -15,60 +16,52 @@ SUMMARY_CHAT_ID = os.getenv("SUMMARY_CHAT_ID")
 
 alerts_buffer = []
 
-# ---------- SYMBOL WEIGHT ----------
-SYMBOL_WEIGHT = {
-    "BANKNIFTY": 0.50,
-    "HDFCBANK": 0.25,
-    "ICICIBANK": 0.25,
-}
+# Symbols to Track
+TRACK_SYMBOLS = ["BANKNIFTY", "HDFCBANK", "ICICIBANK"]
 
-# ---------- ACTION WEIGHT ----------
-ACTION_WEIGHT = {
-    "OPTION_BUY": 0.10,
-    "OPTION_WRITE": 0.40,
-    "FUTURE_BUY": 0.25,
-    "FUTURE_SELL": 0.25,
-}
 
+# ==========================
+# PARSE ALERT
+# ==========================
 def parse_alert(text):
     symbol_match = re.search(r"Symbol:\s*([\w-]+)", text)
     lot_match = re.search(r"LOTS:\s*(\d+)", text)
-    action_match = re.search(r"🚨\s*(.*)", text)
 
-    if not (symbol_match and lot_match and action_match):
+    if not (symbol_match and lot_match):
         return None
 
-    symbol = symbol_match.group(1).upper()
+    symbol_full = symbol_match.group(1).upper()
     lots = int(lot_match.group(1))
-    action_text = action_match.group(1).upper()
 
     base_symbol = None
-    for key in SYMBOL_WEIGHT.keys():
-        if key in symbol:
-            base_symbol = key
+    for s in TRACK_SYMBOLS:
+        if s in symbol_full:
+            base_symbol = s
             break
 
     if not base_symbol:
         return None
 
-    action_type = None
-    sentiment = 0
+    text_upper = text.upper()
 
-    if "CALL WRITER" in action_text:
-        action_type = "OPTION_WRITE"
-        sentiment = -1
-    elif "PUT WRITER" in action_text:
-        action_type = "OPTION_WRITE"
-        sentiment = 1
-    elif "CALL BUY" in action_text or "PUT BUY" in action_text:
-        action_type = "OPTION_BUY"
-        sentiment = 1 if "CALL" in action_text else -1
-    elif "FUTURE BUY" in action_text:
+    action_type = None
+
+    if "CALL WRITER" in text_upper:
+        action_type = "CALL_WRITER"
+    elif "PUT WRITER" in text_upper:
+        action_type = "PUT_WRITER"
+    elif "CALL BUY" in text_upper:
+        action_type = "CALL_BUY"
+    elif "PUT BUY" in text_upper:
+        action_type = "PUT_BUY"
+    elif "SHORT COVERING" in text_upper:
+        action_type = "SHORT_COVERING"
+    elif "LONG UNWINDING" in text_upper:
+        action_type = "LONG_UNWINDING"
+    elif "FUTURE BUY" in text_upper:
         action_type = "FUTURE_BUY"
-        sentiment = 1
-    elif "FUTURE SELL" in action_text:
+    elif "FUTURE SELL" in text_upper:
         action_type = "FUTURE_SELL"
-        sentiment = -1
     else:
         return None
 
@@ -76,10 +69,12 @@ def parse_alert(text):
         "symbol": base_symbol,
         "lots": lots,
         "action_type": action_type,
-        "sentiment": sentiment,
-        "action_text": action_text,
     }
 
+
+# ==========================
+# MESSAGE HANDLER
+# ==========================
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.channel_post or update.message
     if msg and msg.text and str(msg.chat_id) == str(TARGET_CHANNEL_ID):
@@ -87,88 +82,89 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if parsed:
             alerts_buffer.append(parsed)
 
+
+# ==========================
+# PROCESS SUMMARY
+# ==========================
 async def process_summary(context: ContextTypes.DEFAULT_TYPE):
     global alerts_buffer
+
     if not alerts_buffer:
         return
 
     current_batch = list(alerts_buffer)
     alerts_buffer.clear()
 
-    bull_power = 0
-    bear_power = 0
-
-    top_call_writer = {"symbol": "", "lots": 0}
-    top_put_writer = {"symbol": "", "lots": 0}
-    top_future_buy = {"symbol": "", "lots": 0}
-    top_future_sell = {"symbol": "", "lots": 0}
+    # Initialize structure
+    data = defaultdict(lambda: defaultdict(int))
 
     for alert in current_batch:
-        symbol_weight = SYMBOL_WEIGHT.get(alert["symbol"], 0)
-        action_weight = ACTION_WEIGHT.get(alert["action_type"], 0)
+        symbol = alert["symbol"]
+        action = alert["action_type"]
+        lots = alert["lots"]
 
-        score = alert["lots"] * symbol_weight * action_weight
+        data[symbol][action] += lots
 
-        if alert["sentiment"] > 0:
-            bull_power += score
-        else:
-            bear_power += score
+    message = "📊 5 MIN FLOW BREAKDOWN\n\n"
 
-        # Track Top Activities
-        if "CALL WRITER" in alert["action_text"]:
-            if alert["lots"] > top_call_writer["lots"]:
-                top_call_writer = alert
-        if "PUT WRITER" in alert["action_text"]:
-            if alert["lots"] > top_put_writer["lots"]:
-                top_put_writer = alert
-        if alert["action_type"] == "FUTURE_BUY":
-            if alert["lots"] > top_future_buy["lots"]:
-                top_future_buy = alert
-        if alert["action_type"] == "FUTURE_SELL":
-            if alert["lots"] > top_future_sell["lots"]:
-                top_future_sell = alert
+    total_bull = 0
+    total_bear = 0
 
-    net_strength = bull_power - bear_power
+    for symbol in TRACK_SYMBOLS:
+        if symbol not in data:
+            continue
 
-    if net_strength > 500:
-        trade_plan = "📈 BUY CALL"
-    elif net_strength < -500:
-        trade_plan = "📉 BUY PUT"
+        message += f"🔷 {symbol}\n\n"
+
+        cw = data[symbol]["CALL_WRITER"]
+        pw = data[symbol]["PUT_WRITER"]
+        cb = data[symbol]["CALL_BUY"]
+        pb = data[symbol]["PUT_BUY"]
+        sc = data[symbol]["SHORT_COVERING"]
+        lu = data[symbol]["LONG_UNWINDING"]
+        fb = data[symbol]["FUTURE_BUY"]
+        fs = data[symbol]["FUTURE_SELL"]
+
+        message += f"CALL WRITER      : {cw} Lots\n"
+        message += f"PUT WRITER       : {pw} Lots\n"
+        message += f"CALL BUY         : {cb} Lots\n"
+        message += f"PUT BUY          : {pb} Lots\n"
+        message += f"SHORT COVERING   : {sc} Lots\n"
+        message += f"LONG UNWINDING   : {lu} Lots\n"
+        message += f"FUTURE BUY       : {fb} Lots\n"
+        message += f"FUTURE SELL      : {fs} Lots\n"
+        message += "\n---------------------------------\n\n"
+
+        # Basic Bull/Bear Classification
+        bull = pw + cb + sc + fb
+        bear = cw + pb + lu + fs
+
+        total_bull += bull
+        total_bear += bear
+
+    net = total_bull - total_bear
+
+    message += "📈 NET VIEW (All Symbols Combined)\n\n"
+    message += f"Bullish Activity  : {total_bull} Lots\n"
+    message += f"Bearish Activity  : {total_bear} Lots\n"
+    message += f"Net Dominance     : {net}\n\n"
+
+    if net > 0:
+        bias = "🔥 Bullish Build-up"
+    elif net < 0:
+        bias = "🔻 Bearish Build-up"
     else:
-        trade_plan = "⏸ NO TRADE"
+        bias = "⚖ Neutral"
 
-    control = "WRITERS DOMINANT" if bear_power > bull_power else "BUYERS ACTIVE"
-
-    message = f"""
-📊 5 MIN MARKET FLOW ENGINE
-
-🟢 Bull Power: {int(bull_power)}
-🔴 Bear Power: {int(bear_power)}
-⚖️ Net Strength: {int(net_strength)}
-
-━━━━━━━━━━━━━━━━━━
-
-🏆 TOP CALL WRITER
-{top_call_writer['symbol']} → {top_call_writer['lots']} Lots
-
-🏆 TOP PUT WRITER
-{top_put_writer['symbol']} → {top_put_writer['lots']} Lots
-
-🏆 TOP FUTURE BUYER
-{top_future_buy['symbol']} → {top_future_buy['lots']} Lots
-
-🏆 TOP FUTURE SELLER
-{top_future_sell['symbol']} → {top_future_sell['lots']} Lots
-
-━━━━━━━━━━━━━━━━━━
-
-🔥 Market Control: {control}
-🎯 Trade Plan: {trade_plan}
-⏳ Validity: Next 5 Minutes Only
-"""
+    message += f"Bias: {bias}\n"
+    message += "⏳ Validity: Next 5 Minutes Only"
 
     await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=message)
 
+
+# ==========================
+# MAIN
+# ==========================
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -178,6 +174,7 @@ def main():
         app.job_queue.run_repeating(process_summary, interval=300, first=10)
 
     app.run_polling(drop_pending_updates=True)
+
 
 if __name__ == "__main__":
     main()
