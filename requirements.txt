@@ -1,5 +1,5 @@
 python-telegram-bot[job-queue]==21.1
-apscheduler==3.10.4
+apscheduler
 pytz
 nsepython
 pandas
