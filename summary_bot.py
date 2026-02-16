@@ -6,15 +6,20 @@ from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
 
-# Enable logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# --- LOGGING SETUP ---
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', 
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
 # --- CONFIGURATION ---
+# Use environment variables for security on Railway
 BOT_TOKEN = os.getenv("SUMMARIZER_BOT_TOKEN", "8537613424:AAFw7FN2KGIncULsgjuv_r3jF5OvIzFLcuM")
 TARGET_CHANNEL_ID = os.getenv("TARGET_CHANNEL_ID", "-1003665271298") 
 SUMMARY_CHAT_ID = os.getenv("SUMMARY_CHAT_ID", "-1003665271298") 
 
+# Global buffer for alerts
 alerts_buffer = []
 
 def get_alert_details(message_text):
@@ -35,9 +40,11 @@ def get_alert_details(message_text):
         data['lots'] = int(data['lots'])
         action = data['action'].upper()
         symbol = data['symbol'].upper()
+        
+        # Identify Instrument
         data['type'] = 'FUT' if any(x in symbol for x in ["-I", "FUT"]) else 'OPT'
 
-        # Sentiment Weights
+        # Sentiment Analysis Logic
         bullish_smart = ["PUT WRITER", "SHORT COVERING (PE)", "SHORT COVERING ↗️"]
         bullish_retail = ["CALL BUY", "FUTURE BUY", "LONG BUILDUP"]
         bearish_smart = ["CALL WRITER", "SHORT BUILDUP"]
@@ -67,13 +74,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"Buffered: {parsed['symbol']} | {parsed['action']}")
 
 async def manual_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Allows you to trigger the summary immediately using /summary"""
+    """Trigger via /summary in the chat"""
     await process_summary(context)
 
 async def process_summary(context: ContextTypes.DEFAULT_TYPE):
     global alerts_buffer
     if not alerts_buffer:
-        logger.info("Summary skipped: Buffer empty.")
+        logger.info("Summary skipped: Buffer is empty.")
         return
     
     current_batch = list(alerts_buffer)
@@ -108,42 +115,49 @@ async def process_summary(context: ContextTypes.DEFAULT_TYPE):
     
     for name, data in pillars.items():
         score = data['fut_score'] + data['opt_score']
-        status = "🚀 STRONG BULLISH" if score > 1000 else "✅ BULLISH" if score > 200 else "🔥 STRONG BEARISH" if score < -1000 else "❌ BEARISH" if score < -200 else "↔️ NEUTRAL"
+        if score > 1000: status = "🚀 STRONG BULLISH"
+        elif score > 200: status = "✅ BULLISH"
+        elif score < -1000: status = "🔥 STRONG BEARISH"
+        elif score < -200: status = "❌ BEARISH"
+        else: status = "↔️ NEUTRAL"
+        
         pillar_reports.append(f"• **{name}**: {status}\n  (Fut: {int(data['fut_score'])} | Opt: {int(data['opt_score'])})")
 
-    trend = "🚀 STRONG BULLISH" if total_market_score > 1500 else "📈 BULLISH" if total_market_score > 300 else "🔥 STRONG BEARISH" if total_market_score < -1500 else "📉 BEARISH" if total_market_score < -300 else "↔️ NEUTRAL"
+    if total_market_score > 1500: trend = "🚀 STRONG BULLISH"
+    elif total_market_score > 300: trend = "📈 BULLISH"
+    elif total_market_score < -1500: trend = "🔥 STRONG BEARISH"
+    elif total_market_score < -300: trend = "📉 BEARISH"
+    else: trend = "↔️ NEUTRAL / RANGEBOUND"
 
     total_participation = (future_lots_total + option_lots_total) or 1
-    msg = f"📊 **BANK NIFTY MASTER TREND**\nSentiment: **{trend}**\n\n"
+    
+    msg = f"📊 **BANK NIFTY MASTER TREND**\n"
+    msg += f"Sentiment: **{trend}**\n\n"
     msg += "🔹 **The Three Pillars:**\n" + "\n".join(pillar_reports) + "\n\n"
-    msg += f"• ⚡ **Futures**: {int((future_lots_total/total_participation)*100)}% | 📊 **Options**: {int((option_lots_total/total_participation)*100)}%\n"
+    msg += f"• ⚡ **Futures**: {int((future_lots_total/total_participation)*100)}%\n"
+    msg += f"• 📊 **Options**: {int((option_lots_total/total_participation)*100)}%\n"
 
     try:
         await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=msg, parse_mode='Markdown')
-        logger.info("Summary sent to Telegram.")
+        logger.info("Summary posted to Telegram.")
     except Exception as e:
-        logger.error(f"Failed to send summary: {e}")
+        logger.error(f"Post Failed: {e}")
 
-async def main():
-    # Build application with JobQueue enabled
+def main():
+    """Main entry point using the stable run_polling method"""
     application = Application.builder().token(BOT_TOKEN).build()
     
     # Handlers
     application.add_handler(CommandHandler("summary", manual_summary))
-    application.add_handler(MessageHandler(filters.ChatType.CHANNEL | filters.TEXT, message_handler))
+    # Listen to both channel posts and group messages
+    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
     
-    # Faster 30-second interval for testing
+    # Set interval to 300 (5 mins) for production
     if application.job_queue:
-        application.job_queue.run_repeating(process_summary, interval=30, first=10)
+        application.job_queue.run_repeating(process_summary, interval=300, first=10)
     
-    async with application:
-        await application.start()
-        await application.updater.start_polling()
-        logger.info("Bot started. Listening for alerts...")
-        await asyncio.Event().wait()
+    logger.info("Bot starting...")
+    application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        pass
+    main()
