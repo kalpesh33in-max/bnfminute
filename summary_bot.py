@@ -4,14 +4,14 @@ import logging
 from telegram import Update
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
 
-# --- LOGGING ---
+# Enable logging
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- CONFIG ---
 BOT_TOKEN = os.getenv("SUMMARIZER_BOT_TOKEN", "8537613424:AAFw7FN2KGIncULsgjuv_r3jF5OvIzFLcuM")
-TARGET_CHANNEL_ID = os.getenv("TARGET_CHANNEL_ID", "-1003665271298")
-SUMMARY_CHAT_ID = os.getenv("SUMMARY_CHAT_ID", "-1003665271298")
+TARGET_CHANNEL_ID = os.getenv("TARGET_CHANNEL_ID", "-1003665271298") 
+SUMMARY_CHAT_ID = os.getenv("SUMMARY_CHAT_ID", "-1003665271298") 
 
 alerts_buffer = []
 
@@ -27,7 +27,7 @@ def get_alert_details(message_text):
         action, symbol = data['action'].upper(), data['symbol'].upper()
         data['type'] = 'FUT' if any(x in symbol for x in ["-I", "FUT"]) else 'OPT'
         
-        # Bullish/Bearish Weights
+        # Sentiment Weights
         bull_s = ["PUT WRITER", "SHORT COVERING (PE)", "SHORT COVERING ↗️"]
         bull_r = ["CALL BUY", "FUTURE BUY", "LONG BUILDUP"]
         bear_s = ["CALL WRITER", "SHORT BUILDUP"]
@@ -50,56 +50,47 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"Buffered Alert: {parsed['symbol']}")
 
 async def manual_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Manually trigger via /summary command"""
+    """Trigger by typing /summary in your chat"""
     await process_summary(context)
 
 async def process_summary(context: ContextTypes.DEFAULT_TYPE):
     global alerts_buffer
     if not alerts_buffer:
+        logger.info("Buffer empty. No summary to send.")
         return
     
     current_batch = list(alerts_buffer)
     alerts_buffer.clear()
     
-    pillars = {
-        "BANKNIFTY": {"fut": 0, "opt": 0},
-        "HDFCBANK": {"fut": 0, "opt": 0},
-        "ICICIBANK": {"fut": 0, "opt": 0}
-    }
+    # Calculate Trend
+    total_score = sum((a['sentiment'] * a['lots'] * a['weight']) for a in current_batch)
+    trend = "🚀 STRONG BULLISH" if total_score > 500 else "📈 BULLISH" if total_score > 100 else "🔥 STRONG BEARISH" if total_score < -500 else "📉 BEARISH" if total_score < -100 else "↔️ NEUTRAL"
     
-    for a in current_batch:
-        target = next((p for p in pillars if p in a['symbol'].upper()), None)
-        score = a['sentiment'] * a['lots'] * a['weight']
-        if target:
-            if a['type'] == 'FUT': pillars[target]['fut'] += score
-            else: pillars[target]['opt'] += score
+    msg = f"📊 **BANK NIFTY SUMMARY**\n"
+    msg += f"Current Trend: **{trend}**\n"
+    msg += f"Alerts Parsed: {len(current_batch)}\n"
 
-    total_score = sum((p['fut'] + p['opt']) for p in pillars.values())
-    reports = []
-    for name, d in pillars.items():
-        s = d['fut'] + d['opt']
-        status = "🚀 STRONG BULLISH" if s > 1000 else "✅ BULLISH" if s > 200 else "🔥 STRONG BEARISH" if s < -1000 else "❌ BEARISH" if s < -200 else "↔️ NEUTRAL"
-        reports.append(f"• **{name}**: {status}")
-
-    trend = "🚀 STRONG BULLISH" if total_score > 1500 else "📈 BULLISH" if total_score > 300 else "🔥 STRONG BEARISH" if total_score < -1500 else "📉 BEARISH" if total_score < -300 else "↔️ NEUTRAL"
-    
-    msg = f"📊 **BANK NIFTY MASTER TREND**\nSentiment: **{trend}**\n\n" + "\n".join(reports)
-    await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=msg, parse_mode='Markdown')
+    try:
+        await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=msg, parse_mode='Markdown')
+        logger.info("Summary successfully posted to Telegram.")
+    except Exception as e:
+        logger.error(f"Error sending message: {e}")
 
 def main():
-    """Main runner - avoid asyncio.run() to prevent weak reference crash"""
+    # builder() handles all memory and JobQueue setup correctly
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # Handlers
+    # Commands
     application.add_handler(CommandHandler("summary", manual_summary))
+    # Alerts (filtering out bot commands)
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
     
-    # Run summary every 5 minutes (300s)
+    # Run every 5 minutes (300 seconds)
     if application.job_queue:
         application.job_queue.run_repeating(process_summary, interval=300, first=10)
     
-    logger.info("Bot is active and polling...")
-    # This method handles everything correctly on Railway
+    logger.info("Bot started. Listening for alerts...")
+    # run_polling() is the ONLY safe way to run on Railway
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
