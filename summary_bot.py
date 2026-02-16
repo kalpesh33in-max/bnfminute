@@ -49,7 +49,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parsed = get_alert_details(msg.text)
         if parsed:
             alerts_buffer.append(parsed)
-            logger.info(f"Buffered Alert: {parsed['symbol']}")
+            logger.info(f"Buffered: {parsed['symbol']}")
 
 async def process_summary(context: ContextTypes.DEFAULT_TYPE):
     global alerts_buffer
@@ -62,19 +62,19 @@ async def process_summary(context: ContextTypes.DEFAULT_TYPE):
     total_score = sum((a['sentiment'] * a['lots'] * a['weight']) for a in current_batch)
     trend = "🚀 STRONG BULLISH" if total_score > 1500 else "📈 BULLISH" if total_score > 300 else "🔥 STRONG BEARISH" if total_score < -1500 else "📉 BEARISH" if total_score < -300 else "↔️ NEUTRAL"
     
-    msg = f"📊 **BANK NIFTY MASTER TREND**\nSentiment: **{trend}**\nAlerts: {len(current_batch)}"
+    msg = f"📊 **BANK NIFTY SUMMARY**\nSentiment: **{trend}**\nAlerts Processed: {len(current_batch)}"
 
     try:
         await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=msg, parse_mode='Markdown')
-        logger.info("Summary posted.")
+        logger.info("Summary posted successfully.")
     except Exception as e:
         logger.error(f"Post failed: {e}")
 
 def main():
-    # builder() + run_polling() is the ONLY way to fix the memory crash
+    # builder() + run_polling() is the ONLY way to fix the weak reference crash
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # Add handler for channel posts
+    # Add handler for alerts
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
 
     # Background summary timer (300 seconds = 5 minutes)
@@ -82,7 +82,7 @@ def main():
         application.job_queue.run_repeating(process_summary, interval=300, first=10)
 
     logger.info("Bot starting in stable polling mode...")
-    # This blocks and keeps the bot online without loop conflicts
+    # This blocks and handles the loop correctly for Railway
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
