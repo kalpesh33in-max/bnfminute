@@ -4,50 +4,78 @@ import logging
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
-# Logging
+# Enable logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- CONFIG ---
-BOT_TOKEN = os.getenv("SUMMARIZER_BOT_TOKEN", "8537613424:AAFw7FN2KGIncULsgjuv_r3jF5OvIzFLcuM")
-TARGET_CHANNEL_ID = os.getenv("TARGET_CHANNEL_ID", "-1003665271298") 
-SUMMARY_CHAT_ID = os.getenv("SUMMARY_CHAT_ID", "-1003665271298") 
+# --- CONFIGURATION (Pulls from Railway Variables) ---
+BOT_TOKEN = os.getenv("SUMMARIZER_BOT_TOKEN")
+TARGET_CHANNEL_ID = os.getenv("TARGET_CHANNEL_ID") 
+SUMMARY_CHAT_ID = os.getenv("SUMMARY_CHAT_ID") 
 
+# --- STATE ---
 alerts_buffer = []
 
-# (Keep your existing get_alert_details and message_handler functions here)
+def get_alert_details(message_text):
+    patterns = {'action': r"🚨 (.*)", 'symbol': r"Symbol: ([\w-]+)", 'lots': r"LOTS: (\d+)"}
+    data = {}
+    for key, pattern in patterns.items():
+        match = re.search(pattern, message_text)
+        if match: data[key] = match.group(1).strip()
+        else: return None
+    try:
+        data['lots'] = int(data['lots'])
+        symbol = data['symbol'].upper()
+        data['type'] = 'FUT' if any(x in symbol for x in ["-I", "FUT"]) else 'OPT'
+        action = data['action'].upper()
+        
+        # Sentiment logic
+        bull_s = ["PUT WRITER", "SHORT COVERING (PE)", "SHORT COVERING ↗️"]
+        bull_r = ["CALL BUY", "FUTURE BUY", "LONG BUILDUP"]
+        bear_s = ["CALL WRITER", "SHORT BUILDUP"]
+        bear_r = ["PUT BUY", "FUTURE SELL", "LONG UNWINDING (PE)", "LONG UNWINDING ↘️"]
+
+        if any(k in action for k in bull_s): data['sentiment'], data['weight'] = 1, 4.0
+        elif any(k in action for k in bull_r): data['sentiment'], data['weight'] = 1, 1.0
+        elif any(k in action for k in bear_s): data['sentiment'], data['weight'] = -1, 4.0
+        elif any(k in action for k in bear_r): data['sentiment'], data['weight'] = -1, 1.0
+        else: data['sentiment'], data['weight'] = 0, 0
+        return data
+    except: return None
+
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.channel_post or update.message
+    if msg and msg.text and str(msg.chat_id) == str(TARGET_CHANNEL_ID):
+        parsed = get_alert_details(msg.text)
+        if parsed:
+            alerts_buffer.append(parsed)
+            logger.info(f"Buffered: {parsed['symbol']}")
 
 async def process_summary(context: ContextTypes.DEFAULT_TYPE):
     global alerts_buffer
-    if not alerts_buffer:
-        logger.info("Buffer empty. No summary to send.")
-        return
+    if not alerts_buffer: return
     
     current_batch = list(alerts_buffer)
     alerts_buffer.clear()
     
-    # (Keep your existing calculation logic here)
-    msg = f"📊 **BANK NIFTY SUMMARY**\nParsed {len(current_batch)} alerts."
-
-    try:
-        await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=msg, parse_mode='Markdown')
-        logger.info("Summary successfully sent.")
-    except Exception as e:
-        logger.error(f"Failed to send: {e}")
+    # Simple summary for verification
+    total_score = sum((a['sentiment'] * a['lots'] * a['weight']) for a in current_batch)
+    trend = "📈 BULLISH" if total_score > 300 else "📉 BEARISH" if total_score < -300 else "↔️ NEUTRAL"
+    
+    msg = f"📊 **MARKET SUMMARY**\nTrend: {trend}\nAlerts in batch: {len(current_batch)}"
+    await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=msg, parse_mode='Markdown')
 
 def main():
-    # Use the builder to handle all memory setup correctly
+    # Use the builder and run_polling() to avoid the 'weak reference' crash
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # Add handlers
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
 
-    # Set background timer (300 seconds = 5 minutes)
     if application.job_queue:
         application.job_queue.run_repeating(process_summary, interval=300, first=10)
 
-    logger.info("Bot starting...")
-    # This method is the ONLY stable way to run on Railway
+    logger.info("Bot is starting stable polling...")
+    # This replaces all the manual asyncio code that causes your error
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
