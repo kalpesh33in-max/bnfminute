@@ -4,11 +4,11 @@ import logging
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
-# Enable logging
+# --- LOGGING ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- CONFIGURATION (Pulls from Railway Variables) ---
+# --- CONFIG (Pulls from your Railway Variables) ---
 BOT_TOKEN = os.getenv("SUMMARIZER_BOT_TOKEN")
 TARGET_CHANNEL_ID = os.getenv("TARGET_CHANNEL_ID") 
 SUMMARY_CHAT_ID = os.getenv("SUMMARY_CHAT_ID") 
@@ -29,7 +29,7 @@ def get_alert_details(message_text):
         data['type'] = 'FUT' if any(x in symbol for x in ["-I", "FUT"]) else 'OPT'
         action = data['action'].upper()
         
-        # Sentiment logic
+        # Bullish/Bearish Logic
         bull_s = ["PUT WRITER", "SHORT COVERING (PE)", "SHORT COVERING ↗️"]
         bull_r = ["CALL BUY", "FUTURE BUY", "LONG BUILDUP"]
         bear_s = ["CALL WRITER", "SHORT BUILDUP"]
@@ -45,6 +45,7 @@ def get_alert_details(message_text):
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.channel_post or update.message
+    # Compare chat ID from Railway variable
     if msg and msg.text and str(msg.chat_id) == str(TARGET_CHANNEL_ID):
         parsed = get_alert_details(msg.text)
         if parsed:
@@ -53,29 +54,39 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def process_summary(context: ContextTypes.DEFAULT_TYPE):
     global alerts_buffer
-    if not alerts_buffer: return
+    if not alerts_buffer:
+        return
     
     current_batch = list(alerts_buffer)
     alerts_buffer.clear()
     
-    # Simple summary for verification
+    # Trend Calculation
     total_score = sum((a['sentiment'] * a['lots'] * a['weight']) for a in current_batch)
-    trend = "📈 BULLISH" if total_score > 300 else "📉 BEARISH" if total_score < -300 else "↔️ NEUTRAL"
+    trend = "🚀 STRONG BULLISH" if total_score > 1000 else "📈 BULLISH" if total_score > 200 else "🔥 STRONG BEARISH" if total_score < -1000 else "📉 BEARISH" if total_score < -200 else "↔️ NEUTRAL"
     
-    msg = f"📊 **MARKET SUMMARY**\nTrend: {trend}\nAlerts in batch: {len(current_batch)}"
-    await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=msg, parse_mode='Markdown')
+    msg = f"📊 **MARKET TREND SUMMARY**\n"
+    msg += f"Sentiment: **{trend}**\n"
+    msg += f"Alerts Processed: {len(current_batch)}"
+
+    try:
+        await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=msg, parse_mode='Markdown')
+        logger.info("Summary posted to Telegram.")
+    except Exception as e:
+        logger.error(f"Post failed: {e}")
 
 def main():
-    # Use the builder and run_polling() to avoid the 'weak reference' crash
+    # builder() followed by run_polling() is the ONLY way to avoid the weak reference crash
     application = Application.builder().token(BOT_TOKEN).build()
 
+    # Add handler for channel posts
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
 
+    # Setup the background timer
     if application.job_queue:
         application.job_queue.run_repeating(process_summary, interval=300, first=10)
 
-    logger.info("Bot is starting stable polling...")
-    # This replaces all the manual asyncio code that causes your error
+    logger.info("Bot starting in stable polling mode...")
+    # This replaces the manual asyncio logic that caused your error
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
