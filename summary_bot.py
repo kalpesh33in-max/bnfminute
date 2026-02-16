@@ -13,14 +13,10 @@ BOT_TOKEN = os.getenv("SUMMARIZER_BOT_TOKEN")
 TARGET_CHANNEL_ID = os.getenv("TARGET_CHANNEL_ID") 
 SUMMARY_CHAT_ID = os.getenv("SUMMARY_CHAT_ID") 
 
-# (Keep your existing message_handler and get_alert_details functions here)
-
-async def process_summary(context: ContextTypes.DEFAULT_TYPE):
-    # (Keep your existing summary calculation logic here)
-    pass
+# (Keep your existing message_handler and calculation logic here)
 
 def main():
-    # builder() followed by run_polling() is the only way to avoid the crash in 3.13
+    # builder() + run_polling() is the ONLY way to avoid the weakref crash in 3.13
     application = Application.builder().token(BOT_TOKEN).build()
     
     # Standard message handler
@@ -32,7 +28,7 @@ def main():
     
     logger.info("Bot starting in stable polling mode...")
     
-    # This blocks and keeps the bot online without the asyncio.run() conflict
+    # This blocks and keeps the bot online without the loop conflict
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
