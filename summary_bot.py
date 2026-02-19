@@ -18,20 +18,41 @@ TRACK_SYMBOLS = ["BANKNIFTY", "HDFCBANK", "ICICIBANK"]
 
 def parse_alert(text):
     text_upper = text.upper()
+    
+    # Extracting core data fields
     symbol_match = re.search(r"SYMBOL:\s*([\w-]+)", text_upper)
     lot_match = re.search(r"LOTS:\s*(\d+)", text_upper)
+    price_match = re.search(r"PRICE:\s*([\d.]+)", text_upper)
+    oi_match = re.search(r"OI\s+CHANGE\s*:\s*([+-]?[\d,]+)", text_upper)
 
     if not (symbol_match and lot_match):
         return None
 
     symbol_val = symbol_match.group(1)
     lots = int(lot_match.group(1))
-    base_symbol = next((s for s in TRACK_SYMBOLS if s in symbol_val), None)
+    price = float(price_match.group(1)) if price_match else 0
     
+    # Handle OI Change (removing commas and converting to absolute magnitude)
+    oi_str = oi_match.group(1).replace(",", "").replace("+", "") if oi_match else "0"
+    oi_qty = abs(int(oi_str))
+
+    # Identify base symbol
+    base_symbol = next((s for s in TRACK_SYMBOLS if s in symbol_val), None)
     if not base_symbol:
         return None
 
-    # Logic to handle tags like (CE), (PE), (LONG) from your live feed
+    # Identify if it is an Option or Future
+    is_option = "CE" in symbol_val or "PE" in symbol_val
+    
+    # --- NEW CALCULATION LOGIC ---
+    if is_option:
+        # Options: OI Qty x Price
+        final_value = oi_qty * price
+    else:
+        # Futures: Lots x 100,000
+        final_value = lots * 100000
+
+    # Categorization logic
     action_type = None
     if "CALL WRITER" in text_upper: action_type = "CALL_WRITER"
     elif "PUT WRITER" in text_upper: action_type = "PUT_WRITER"
@@ -48,7 +69,9 @@ def parse_alert(text):
     elif "FUTURE BUY" in text_upper: action_type = "FUT_BUY"
     elif "FUTURE SELL" in text_upper: action_type = "FUT_SELL"
 
-    return {"symbol": base_symbol, "lots": lots, "action_type": action_type} if action_type else None
+    if not action_type: return None
+
+    return {"symbol": base_symbol, "value": final_value, "action_type": action_type}
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
@@ -65,35 +88,34 @@ async def process_summary(context: ContextTypes.DEFAULT_TYPE):
     current_batch, alerts_buffer = list(alerts_buffer), []
     data = defaultdict(lambda: defaultdict(int))
     for a in current_batch:
-        data[a["symbol"]][a["action_type"]] += a["lots"]
+        data[a["symbol"]][a["action_type"]] += a["value"]
 
-    # FORMATTING THE NEW SEQUENCE
-    message = "📊 1 MINUTE FLOW SUMMARY\n\n"
+    message = "📊 1 MINUTE VALUE SUMMARY\n\n"
     total_bull = total_bear = 0
 
     for symbol in TRACK_SYMBOLS:
         if symbol not in data: continue
         d = data[symbol]
+        
         message += f"🔷 {symbol}\n"
         message += "---------------------------\nTYPE\n---------------------------\n"
-        message += f"CALL WRITER : {d['CALL_WRITER']} Lots\n"
-        message += f"PUT WRITER  : {d['PUT_WRITER']} Lots\n"
-        message += f"CALL BUY    : {d['CALL_BUY']} Lots\n"
-        message += f"PUT BUY     : {d['PUT_BUY']} Lots\n"
-        message += f"CALL SC     : {d['CALL_SC']} Lots\n"
-        message += f"PUT SC      : {d['PUT_SC']} Lots\n"
-        message += f"CALL UNW    : {d['CALL_UNW']} Lots\n"
-        message += f"PUT UNW     : {d['PUT_UNW']} Lots\n"
+        # Displaying formatted numbers with commas
+        message += f"CALL WRITER : {d['CALL_WRITER']:,.0f}\n"
+        message += f"PUT WRITER  : {d['PUT_WRITER']:,.0f}\n"
+        message += f"CALL BUY    : {d['CALL_BUY']:,.0f}\n"
+        message += f"PUT BUY     : {d['PUT_BUY']:,.0f}\n"
+        message += f"CALL SC     : {d['CALL_SC']:,.0f}\n"
+        message += f"PUT SC      : {d['PUT_SC']:,.0f}\n"
+        message += f"CALL UNW    : {d['CALL_UNW']:,.0f}\n"
+        message += f"PUT UNW     : {d['PUT_UNW']:,.0f}\n"
         message += "---------------------------\n"
-        message += f"FUT BUY     : {d['FUT_BUY']} Lots\n"
-        message += f"FUT SELL    : {d['FUT_SELL']} Lots\n"
-        message += f"FUT SC      : {d['FUT_SC']} Lots\n"
-        message += f"FUT UNW     : {d['FUT_UNW']} Lots\n"
+        message += f"FUT BUY     : {d['FUT_BUY']:,.0f}\n"
+        message += f"FUT SELL    : {d['FUT_SELL']:,.0f}\n"
+        message += f"FUT SC      : {d['FUT_SC']:,.0f}\n"
+        message += f"FUT UNW     : {d['FUT_UNW']:,.0f}\n"
         message += "---------------------------\n\n"
 
-        # Bullish: Put Writer, Call Buy, Call SC, Put UNW, Fut Buy, Fut SC
         bull = d['PUT_WRITER'] + d['CALL_BUY'] + d['CALL_SC'] + d['PUT_UNW'] + d['FUT_BUY'] + d['FUT_SC']
-        # Bearish: Call Writer, Put Buy, Put SC, Call UNW, Fut Sell, Fut UNW
         bear = d['CALL_WRITER'] + d['PUT_BUY'] + d['PUT_SC'] + d['CALL_UNW'] + d['FUT_SELL'] + d['FUT_UNW']
         total_bull += bull
         total_bear += bear
@@ -101,10 +123,10 @@ async def process_summary(context: ContextTypes.DEFAULT_TYPE):
     net = total_bull - total_bear
     bias = "🔥 Bullish Build-up" if net > 0 else "🔻 Bearish Build-up" if net < 0 else "⚖ Neutral"
     
-    message += "📈 NET VIEW (All Symbols Combined)\n\n"
-    message += f"Bullish Activity : {total_bull} Lots\n"
-    message += f"Bearish Activity : {total_bear} Lots\n"
-    message += f"Net Dominance    : {net}\n\n"
+    message += "📈 NET VALUE VIEW\n\n"
+    message += f"Total Bullish : {total_bull:,.0f}\n"
+    message += f"Total Bearish : {total_bear:,.0f}\n"
+    message += f"Net Dominance : {net:,.0f}\n\n"
     message += f"Bias: {bias}\n"
     message += "⏳ Validity: Next 1 Minute Only"
 
