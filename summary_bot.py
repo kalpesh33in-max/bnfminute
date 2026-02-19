@@ -17,7 +17,7 @@ alerts_buffer = []
 TRACK_SYMBOLS = ["BANKNIFTY", "HDFCBANK", "ICICIBANK"]
 
 def format_rs_short(value):
-    """Converts Rupee values to short string format (L/Cr) for table alignment"""
+    """Converts large numbers into short Lakhs (L) or Crores (Cr) format for table alignment."""
     if value == 0: return "0"
     abs_val = abs(value)
     if abs_val >= 10000000: return f"{value / 10000000:.2f}Cr"
@@ -25,13 +25,13 @@ def format_rs_short(value):
     if abs_val >= 1000: return f"{value / 1000:.1f}k"
     return str(int(value))
 
-def get_moneyness(symbol, spot, action_side):
-    """Identifies ITM/ATM/OTM by comparing strike to current Future Price"""
+def get_moneyness(symbol, spot):
+    """Determines ITM/ATM/OTM based on strike vs future price."""
     strike_match = re.search(r"(\d{4,6})", symbol)
     if not strike_match or spot == 0: return "OTM"
     strike = float(strike_match.group(1))
     
-    # Standard ATM threshold for BankNifty
+    # Standard 50-point ATM threshold for BankNifty
     if abs(strike - spot) <= 50: return "ATM"
     
     if "CE" in symbol:
@@ -40,8 +40,8 @@ def get_moneyness(symbol, spot, action_side):
         return "ITM" if strike > spot else "OTM"
 
 def parse_alert(text):
-    """Extracts data and calculates monetary weight"""
-    if not text: return None
+    """Extracts data and applies the Formula: Options (OI * Price) | Futures (Lots * 1L)."""
+    if not text: return None # Fix for the NoneType error in logs
     text_upper = text.upper()
     
     symbol_match = re.search(r"SYMBOL:\s*([\w-]+)", text_upper)
@@ -61,11 +61,9 @@ def parse_alert(text):
     spot = float(spot_match.group(1)) if spot_match else 0
     oi_qty = abs(int(oi_match.group(1).replace(",", "").replace("+", ""))) if oi_match else 0
 
-    # Valuation Math
     is_option = any(x in symbol_val for x in ["CE", "PE"])
-    val = (oi_qty * price) if is_option else (lots * 100000)
-    
-    money_cat = get_moneyness(symbol_val, spot, symbol_val) if is_option else "TOT"
+    val = (oi_qty * price) if is_option else (lots * 100000) #
+    money_cat = get_moneyness(symbol_val, spot) if is_option else "TOT"
 
     # Action detection
     action = None
@@ -96,7 +94,7 @@ async def process_summary(context: ContextTypes.DEFAULT_TYPE):
             data[a["symbol"]][a["action"]][a["cat"]] += a["val"]
             spots[a["symbol"]] = a["spot"]
 
-    message = "📊 1-MIN VALUATION REPORT\n\n"
+    message = "📊 <b>1-MIN VALUE REPORT</b>\n\n"
     total_bull = total_bear = 0
 
     for sym in TRACK_SYMBOLS:
@@ -122,16 +120,17 @@ async def process_summary(context: ContextTypes.DEFAULT_TYPE):
         total_bear += (d["CALL WRITER"]["TOT"] + d["PUT BUY"]["TOT"] + d["PUT SC"]["TOT"] + d["CALL UNW"]["TOT"] + d["FUT SELL"]["TOT"] + d["FUT UNW"]["TOT"])
 
     net = total_bull - total_bear
-    message += f"📈 NET MONETARY VIEW\nBull: {format_rs_short(total_bull)} | Bear: {format_rs_short(total_bear)}\n"
+    message += f"📈 <b>NET MONETARY VIEW</b>\nBull: {format_rs_short(total_bull)} | Bear: {format_rs_short(total_bear)}\n"
     message += f"Dominance: {format_rs_short(net)}\n"
-    message += f"Bias: {'🔥 Bullish' if net > 0 else '🔻 Bearish' if net < 0 else '⚖ Neutral'}"
+    message += f"Bias: {'🔥 Bullish' if net > 0 else '🔻 Bearish' if net < 0 else '⚖ Neutral'}" #
 
     await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=f"<code>{message}</code>", parse_mode="HTML")
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
-    # Fixed the lambda to prevent NoneType errors found in your logs
+    
     async def safe_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        # Validation added to prevent crash from NoneType text
         if update.message and update.message.text:
             parsed = parse_alert(update.message.text)
             if parsed: alerts_buffer.append(parsed)
