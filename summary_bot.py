@@ -19,6 +19,7 @@ alerts_buffer = []
 # Symbols to Track
 TRACK_SYMBOLS = ["BANKNIFTY", "HDFCBANK", "ICICIBANK"]
 
+
 # ==========================
 # PARSE ALERT
 # ==========================
@@ -43,19 +44,24 @@ def parse_alert(text):
 
     text_upper = text.upper()
 
-    # Updated Action List Logic
-    if "CALL SHORTCOVERING" in text_upper:
-        action_type = "CALL_SC"
-    elif "CALL LONG-WINDED" in text_upper:
-        action_type = "CALL_LW"
-    elif "PUT SHORTCOVERING" in text_upper:
-        action_type = "PUT_SC"
-    elif "PUT LONG-WINDED" in text_upper:
-        action_type = "PUT_LW"
-    elif "FUTURE SHORTCOVERING" in text_upper:
-        action_type = "FUT_SC"
-    elif "FUTURE LONG-WINDED" in text_upper:
-        action_type = "FUT_LW"
+    action_type = None
+
+    if "CALL WRITER" in text_upper:
+        action_type = "CALL_WRITER"
+    elif "PUT WRITER" in text_upper:
+        action_type = "PUT_WRITER"
+    elif "CALL BUY" in text_upper:
+        action_type = "CALL_BUY"
+    elif "PUT BUY" in text_upper:
+        action_type = "PUT_BUY"
+    elif "SHORT COVERING" in text_upper:
+        action_type = "SHORT_COVERING"
+    elif "LONG UNWINDING" in text_upper:
+        action_type = "LONG_UNWINDING"
+    elif "FUTURE BUY" in text_upper:
+        action_type = "FUTURE_BUY"
+    elif "FUTURE SELL" in text_upper:
+        action_type = "FUTURE_SELL"
     else:
         return None
 
@@ -64,6 +70,7 @@ def parse_alert(text):
         "lots": lots,
         "action_type": action_type,
     }
+
 
 # ==========================
 # MESSAGE HANDLER
@@ -74,6 +81,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parsed = parse_alert(msg.text)
         if parsed:
             alerts_buffer.append(parsed)
+
 
 # ==========================
 # PROCESS SUMMARY
@@ -87,12 +95,14 @@ async def process_summary(context: ContextTypes.DEFAULT_TYPE):
     current_batch = list(alerts_buffer)
     alerts_buffer.clear()
 
+    # Initialize structure
     data = defaultdict(lambda: defaultdict(int))
 
     for alert in current_batch:
         symbol = alert["symbol"]
         action = alert["action_type"]
         lots = alert["lots"]
+
         data[symbol][action] += lots
 
     message = "📊 5 MIN FLOW BREAKDOWN\n\n"
@@ -106,26 +116,28 @@ async def process_summary(context: ContextTypes.DEFAULT_TYPE):
 
         message += f"🔷 {symbol}\n\n"
 
-        c_sc = data[symbol]["CALL_SC"]
-        c_lw = data[symbol]["CALL_LW"]
-        p_sc = data[symbol]["PUT_SC"]
-        p_lw = data[symbol]["PUT_LW"]
-        f_sc = data[symbol]["FUT_SC"]
-        f_lw = data[symbol]["FUT_LW"]
+        cw = data[symbol]["CALL_WRITER"]
+        pw = data[symbol]["PUT_WRITER"]
+        cb = data[symbol]["CALL_BUY"]
+        pb = data[symbol]["PUT_BUY"]
+        sc = data[symbol]["SHORT_COVERING"]
+        lu = data[symbol]["LONG_UNWINDING"]
+        fb = data[symbol]["FUTURE_BUY"]
+        fs = data[symbol]["FUTURE_SELL"]
 
-        message += f"CALL SHORTCOVERING   : {c_sc} Lots\n"
-        message += f"CALL LONG-WINDED     : {c_lw} Lots\n"
-        message += f"PUT SHORTCOVERING    : {p_sc} Lots\n"
-        message += f"PUT LONG-WINDED      : {p_lw} Lots\n"
-        message += f"FUTURE SHORTCOVERING : {f_sc} Lots\n"
-        message += f"FUTURE LONG-WINDED   : {f_lw} Lots\n"
+        message += f"CALL WRITER      : {cw} Lots\n"
+        message += f"PUT WRITER       : {pw} Lots\n"
+        message += f"CALL BUY         : {cb} Lots\n"
+        message += f"PUT BUY          : {pb} Lots\n"
+        message += f"SHORT COVERING   : {sc} Lots\n"
+        message += f"LONG UNWINDING   : {lu} Lots\n"
+        message += f"FUTURE BUY       : {fb} Lots\n"
+        message += f"FUTURE SELL      : {fs} Lots\n"
         message += "\n---------------------------------\n\n"
 
-        # Classification Logic:
-        # Bullish: Call SC, Put LW, Future SC
-        # Bearish: Call LW, Put SC, Future LW
-        bull = c_sc + p_lw + f_sc
-        bear = c_lw + p_sc + f_lw
+        # Basic Bull/Bear Classification
+        bull = pw + cb + sc + fb
+        bear = cw + pb + lu + fs
 
         total_bull += bull
         total_bear += bear
@@ -149,14 +161,20 @@ async def process_summary(context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=message)
 
+
+# ==========================
+# MAIN
+# ==========================
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
+
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
 
     if app.job_queue:
         app.job_queue.run_repeating(process_summary, interval=300, first=10)
 
     app.run_polling(drop_pending_updates=True)
+
 
 if __name__ == "__main__":
     main()
