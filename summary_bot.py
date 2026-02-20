@@ -17,7 +17,6 @@ alerts_buffer = []
 TRACK_SYMBOLS = ["BANKNIFTY", "HDFCBANK", "ICICIBANK"]
 
 def format_indian_value(val):
-    """Formats numbers into Indian numbering system (Cr/Lakh)"""
     abs_val = abs(val)
     if abs_val >= 10000000:
         formatted = f"{val / 10000000:.2f} Cr"
@@ -29,145 +28,110 @@ def format_indian_value(val):
 
 def parse_alert(text):
     text_upper = text.upper()
-    
-    # Extracting core data fields
     symbol_match = re.search(r"SYMBOL:\s*([\w-]+)", text_upper)
     lot_match = re.search(r"LOTS:\s*(\d+)", text_upper)
     price_match = re.search(r"PRICE:\s*([\d.]+)", text_upper)
-    oi_match = re.search(r"OI\s+CHANGE\s*:\s*([+-]?[\d,]+)", text_upper)
-
-    if not (symbol_match and lot_match):
-        return None
-
-    symbol_val = symbol_match.group(1)
+    oi_match = re.search(r"OI CHANGE:\s*([\d,]+)", text_upper)
+    
+    if not symbol_match or not lot_match: return None
+    
+    symbol = symbol_match.group(1)
+    if symbol not in TRACK_SYMBOLS: return None
+    
     lots = int(lot_match.group(1))
     price = float(price_match.group(1)) if price_match else 0
-    
-    oi_str = oi_match.group(1).replace(",", "").replace("+", "") if oi_match else "0"
-    oi_qty = abs(int(oi_str))
+    oi_change = int(oi_match.group(1).replace(',', '')) if oi_match else 0
 
-    base_symbol = next((s for s in TRACK_SYMBOLS if s in symbol_val), None)
-    if not base_symbol:
-        return None
+    category = "OTHERS"
+    if "CALL WRITER" in text_upper: category = "CALL_WRITER"
+    elif "PUT WRITER" in text_upper: category = "PUT_WRITER"
+    elif "CALL BUYER" in text_upper: category = "CALL_BUYER"
+    elif "PUT BUYER" in text_upper: category = "PUT_BUYER"
+    elif "CALL SHORT COVERING" in text_upper: category = "CALL_SC"
+    elif "PUT SHORT COVERING" in text_upper: category = "PUT_SC"
+    elif "CALL UNWINDING" in text_upper: category = "CALL_UNW"
+    elif "PUT UNWINDING" in text_upper: category = "PUT_UNW"
+    elif "FUTURE BUY" in text_upper: category = "FUT_BUY"
+    elif "FUTURE SELL" in text_upper: category = "FUT_SELL"
+    elif "FUTURE SHORT COVERING" in text_upper: category = "FUT_SC"
+    elif "FUTURE UNWINDING" in text_upper: category = "FUT_UNW"
 
-    is_option = "CE" in symbol_val or "PE" in symbol_val
-    
-    if is_option:
-        # Options: OI Qty x Price
-        final_value = oi_qty * price
+    value = 0
+    if "FUTURE" in category:
+        value = lots * 100000
     else:
-        # Futures: Lots x 100,000
-        final_value = lots * 100000
+        value = price * oi_change
 
-    # Categorization logic
-    action_type = None
-    if "CALL WRITER" in text_upper: action_type = "CALL_WRITER"
-    elif "PUT WRITER" in text_upper: action_type = "PUT_WRITER"
-    elif "CALL BUY" in text_upper: action_type = "CALL_BUY"
-    elif "PUT BUY" in text_upper: action_type = "PUT_BUY"
-    elif "SHORT COVERING" in text_upper:
-        if "(CE)" in text_upper: action_type = "CALL_SC"
-        elif "(PE)" in text_upper: action_type = "PUT_SC"
-        else: action_type = "FUT_SC"
-    elif "LONG UNWINDING" in text_upper:
-        if "(CE)" in text_upper: action_type = "CALL_UNW"
-        elif "(PE)" in text_upper: action_type = "PUT_UNW"
-        else: action_type = "FUT_UNW"
-    elif "FUTURE BUY" in text_upper: action_type = "FUT_BUY"
-    elif "FUTURE SELL" in text_upper: action_type = "FUT_SELL"
+    return {"symbol": symbol, "category": category, "lots": lots, "value": value}
 
-    if not action_type: return None
-
-    return {"symbol": base_symbol, "value": final_value, "action_type": action_type, "lots": lots}
-
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.effective_message
-    if msg and msg.text and str(msg.chat_id) == str(TARGET_CHANNEL_ID):
-        parsed = parse_alert(msg.text)
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.channel_post.chat_id) == TARGET_CHANNEL_ID:
+        parsed = parse_alert(update.channel_post.text)
         if parsed:
             alerts_buffer.append(parsed)
 
-async def process_summary(context: ContextTypes.DEFAULT_TYPE):
+async def send_summary(context: ContextTypes.DEFAULT_TYPE):
     global alerts_buffer
-    if not alerts_buffer:
-        return
+    if not alerts_buffer: return
 
-    current_batch, alerts_buffer = list(alerts_buffer), []
-    # Nested dict to store both total value and total lots
-    data = defaultdict(lambda: defaultdict(lambda: {"value": 0, "lots": 0}))
-    
-    for a in current_batch:
-        sym = a["symbol"]
-        act = a["action_type"]
-        data[sym][act]["value"] += a["value"]
-        data[sym][act]["lots"] += a["lots"]
+    current_data = alerts_buffer.copy()
+    alerts_buffer = []
 
-    message = "📊 1 MINUTE VALUE SUMMARY\n\n"
-    total_bull_v = total_bear_v = 0
-    total_bull_l = total_bear_l = 0
+    summary = {s: defaultdict(lambda: {'value': 0, 'lots': 0}) for s in TRACK_SYMBOLS}
+    for item in current_data:
+        summary[item['symbol']][item['category']]['value'] += item['value']
+        summary[item['symbol']][item['category']]['lots'] += item['lots']
 
-    for symbol in TRACK_SYMBOLS:
-        if symbol not in data: continue
-        d = data[symbol]
+    message = "📊 *VALUE SUMMARY REPORT*\n\n"
+    total_bull_v, total_bear_v = 0, 0
+    total_bull_l, total_bear_l = 0, 0
+
+    for symbol, categories in summary.items():
+        message += f"🔹 *{symbol}*\n"
+        for cat, data in categories.items():
+            if data['lots'] > 0:
+                message += f"{cat.replace('_',' ')} : {format_indian_value(data['value'])} ({data['lots']} Lots)\n"
         
-        message += f"🔷 {symbol}\n"
-        message += "---------------------------\nTYPE\n---------------------------\n"
+        # Sentiment logic
+        bull_v = categories['PUT_WRITER']['value'] + categories['CALL_BUYER']['value'] + categories['CALL_SC']['value'] + \
+                 categories['PUT_UNW']['value'] + categories['FUT_BUY']['value'] + categories['FUT_SC']['value']
+        bull_l = categories['PUT_WRITER']['lots'] + categories['CALL_BUYER']['lots'] + categories['CALL_SC']['lots'] + \
+                 categories['PUT_UNW']['lots'] + categories['FUT_BUY']['lots'] + categories['FUT_SC']['lots']
         
-        def get_line(label, key):
-            val = d[key]["value"]
-            lts = d[key]["lots"]
-            return f"{label.ljust(12)}: {format_indian_value(val)} ({lts} Lots)\n"
-
-        message += get_line("CALL WRITER", "CALL_WRITER")
-        message += get_line("PUT WRITER", "PUT_WRITER")
-        message += get_line("CALL BUY", "CALL_BUY")
-        message += get_line("PUT BUY", "PUT_BUY")
-        message += get_line("CALL SC", "CALL_SC")
-        message += get_line("PUT SC", "PUT_SC")
-        message += get_line("CALL UNW", "CALL_UNW")
-        message += get_line("PUT UNW", "PUT_UNW")
-        message += "---------------------------\n"
-        message += get_line("FUT BUY", "FUT_BUY")
-        message += get_line("FUT SELL", "FUT_SELL")
-        message += get_line("FUT SC", "FUT_SC")
-        message += get_line("FUT UNW", "FUT_UNW")
-        message += "---------------------------\n\n"
-
-        # Calculate Bullish vs Bearish aggregates
-        bull_v = d['PUT_WRITER']['value'] + d['CALL_BUY']['value'] + d['CALL_SC']['value'] + d['PUT_UNW']['value'] + d['FUT_BUY']['value'] + d['FUT_SC']['value']
-        bull_l = d['PUT_WRITER']['lots'] + d['CALL_BUY']['lots'] + d['CALL_SC']['lots'] + d['PUT_UNW']['lots'] + d['FUT_BUY']['lots'] + d['FUT_SC']['lots']
-        
-        bear_v = d['CALL_WRITER']['value'] + d['PUT_BUY']['value'] + d['PUT_SC']['value'] + d['CALL_UNW']['value'] + d['FUT_SELL']['value'] + d['FUT_UNW']['value']
-        bear_l = d['CALL_WRITER']['lots'] + d['PUT_BUY']['lots'] + d['PUT_SC']['lots'] + d['CALL_UNW']['lots'] + d['FUT_SELL']['lots'] + d['FUT_UNW']['lots']
+        bear_v = categories['CALL_WRITER']['value'] + categories['PUT_BUY']['value'] + categories['PUT_SC']['value'] + \
+                 categories['CALL_UNW']['value'] + categories['FUT_SELL']['value'] + categories['FUT_UNW']['value']
+        bear_l = categories['CALL_WRITER']['lots'] + categories['PUT_BUY']['lots'] + categories['PUT_SC']['lots'] + \
+                 categories['CALL_UNW']['lots'] + categories['FUT_SELL']['lots'] + categories['FUT_UNW']['lots']
         
         total_bull_v += bull_v
-        total_bull_l += bull_l
         total_bear_v += bear_v
+        total_bull_l += bull_l
         total_bear_l += bear_l
+        message += "\n"
 
     net_v = total_bull_v - total_bear_v
     net_l = total_bull_l - total_bear_l
-    bias = "🔥 Bullish Build-up" if net_v > 0 else "🔻 Bearish Build-up" if net_v < 0 else "⚖ Neutral"
+    bias = "🚀 Bullish Build-up" if net_v > 0 else "📉 Bearish Build-up" if net_v < 0 else "⚖️ Neutral"
     
-    message += "📈 NET VALUE VIEW\n\n"
+    message += "📈 *NET VALUE VIEW*\n\n"
     message += f"Total Bullish : {format_indian_value(total_bull_v)} ({total_bull_l} Lots)\n"
     message += f"Total Bearish : {format_indian_value(total_bear_v)} ({total_bear_l} Lots)\n"
     message += f"Net Dominance : {format_indian_value(net_v)} ({abs(net_l)} Lots)\n\n"
     message += f"Bias: {bias}\n"
-    message += "⏳ Validity: Next 1 Minute Only"
+    message += "⏳ Validity: Next 2 Minutes Only" # Updated to reflect 120s interval
 
-    await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=message)
+    await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=message, parse_mode='Markdown')
 
 def main():
-    if not BOT_TOKEN:
-        print("Error: SUMMARIZER_BOT_TOKEN not set.")
-        return
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
-    if app.job_queue:
-        app.job_queue.run_repeating(process_summary, interval=60, first=10)
-    print("Bot is starting summary tracking...")
-    app.run_polling()
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    # Listen for messages in the source channel
+    application.add_handler(MessageHandler(filters.ChatType.CHANNEL, handle_message))
+    
+    # SCHEDULER: Changed interval from 60 to 120 seconds
+    application.job_queue.run_repeating(send_summary, interval=120, first=10)
+    
+    application.run_polling()
 
 if __name__ == "__main__":
     main()
