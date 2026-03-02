@@ -160,24 +160,17 @@ async def process_summary(context: ContextTypes.DEFAULT_TYPE):
             fut_data[sym][act] += lots
             fut_turn[sym][act] += (lots * 100000)
 
-    message = "<pre>
-📊 15 MIN INSTITUTIONAL FLOW REPORT
-
-"
+    message = "<pre>\n📊 15 MIN INSTITUTIONAL FLOW REPORT\n\n"
 
     for symbol in TRACK_SYMBOLS:
         if symbol not in opt_data and symbol not in fut_data: continue
 
-        message += f"💎 {symbol} (FUT: {last_future.get(symbol,'N/A')})
-"
+        message += f"💎 {symbol} (FUT: {last_future.get(symbol,'N/A')})\n"
         
         if symbol in opt_data:
-            message += "--- OPTIONS FLOW ---
-"
-            message += f"{'TYPE':10}{'ITM':>15}{'OTM':>15}{'TOT':>15}
-"
-            message += "-" * 55 + "
-"
+            message += "--- OPTIONS FLOW ---\n"
+            message += f"{'TYPE':10}{'ITM':>15}{'OTM':>15}{'TOT':>15}\n"
+            message += "-" * 55 + "\n"
             s_bull_lots, s_bear_lots, s_turnover = 0, 0, 0
             for act in opt_data[symbol]:
                 itm_l, otm_l = opt_data[symbol][act]["ITM"], opt_data[symbol][act]["OTM"]
@@ -190,21 +183,15 @@ async def process_summary(context: ContextTypes.DEFAULT_TYPE):
                 itm_str = f"{itm_l}({format_money(itm_t)})"
                 otm_str = f"{otm_l}({format_money(otm_t)})"
                 tot_str = f"{tot_l}({format_money(tot_t)})"
-                message += f"{act[:10]:10}{itm_str:>15}{otm_str:>15}{tot_str:>15}
-"
+                message += f"{act[:10]:10}{itm_str:>15}{otm_str:>15}{tot_str:>15}\n"
             
             opt_net = s_bull_lots - s_bear_lots
-            message += "-" * 55 + "
-"
-            message += f"Option Bias: {get_bias_label(opt_net)}
-"
-            message += f"Option Turn: {format_money(s_turnover)}
-
-"
+            message += "-" * 55 + "\n"
+            message += f"Option Bias: {get_bias_label(opt_net)}\n"
+            message += f"Option Turn: {format_money(s_turnover)}\n\n"
 
         if symbol in fut_data:
-            message += "--- FUTURES FLOW ---
-"
+            message += "--- FUTURES FLOW ---\n"
             f_bull_lots, f_bear_lots, f_turnover = 0, 0, 0
             for act in fut_data[symbol]:
                 lots = fut_data[symbol][act]
@@ -212,21 +199,15 @@ async def process_summary(context: ContextTypes.DEFAULT_TYPE):
                 f_turnover += turn
                 if act in ["FUTURE_BUY", "FUTURE_SC"]: f_bull_lots += lots
                 else: f_bear_lots += lots
-                message += f"{act:12} : {lots} lots ({format_money(turn)})
-"
+                message += f"{act:12} : {lots} lots ({format_money(turn)})\n"
             
             fut_net = f_bull_lots - f_bear_lots
-            message += f"Future Bias: {get_bias_label(fut_net)}
-"
-            message += f"Future Turn: {format_money(f_turnover)}
-"
+            message += f"Future Bias: {get_bias_label(fut_net)}\n"
+            message += f"Future Turn: {format_money(f_turnover)}\n"
         
-        message += "=" * 55 + "
+        message += "=" * 55 + "\n\n"
 
-"
-
-    message += "Validity: Next 15 Minutes
-"
+    message += "Validity: Next 15 Minutes\n"
     message += "</pre>"
 
     await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=message, parse_mode="HTML")
