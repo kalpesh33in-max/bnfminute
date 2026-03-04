@@ -1,6 +1,7 @@
 import os
 import re
 import logging
+from datetime import datetime, timedelta
 from collections import defaultdict
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
@@ -14,6 +15,7 @@ BOT_TOKEN = os.getenv("SUMMARIZER_BOT_TOKEN")
 TARGET_CHANNEL_ID = os.getenv("TARGET_CHANNEL_ID")
 SUMMARY_CHAT_ID = os.getenv("SUMMARY_CHAT_ID")
 
+# Buffer now stores (parsed_data, timestamp)
 alerts_buffer = []
 
 TRACK_SYMBOLS = ["BANKNIFTY", "HDFCBANK", "ICICIBANK", "AXISBANK", "SBIN"]
@@ -26,34 +28,19 @@ LOT_SIZES = {
     "SBIN": 750
 }
 
-# ===============================
-# MONEY FORMAT
-# ===============================
 def format_money(value):
-    if value >= 1e7:
-        return f"{value/1e7:.2f}Cr"
-    elif value >= 1e5:
-        return f"{value/1e5:.2f}L"
-    else:
-        return f"{value:.0f}"
+    if value >= 1e7: return f"{value/1e7:.2f}Cr"
+    elif value >= 1e5: return f"{value/1e5:.2f}L"
+    else: return f"{value:.0f}"
 
-# ===============================
-# ITM / OTM LOGIC
-# ===============================
 def classify_strike(strike, option_type, future_price):
     try:
-        strike = float(strike)
-        future_price = float(future_price)
-        if option_type == "CE":
-            return "ITM" if strike < future_price else "OTM"
-        elif option_type == "PE":
-            return "ITM" if strike > future_price else "OTM"
+        strike, future_price = float(strike), float(future_price)
+        if option_type == "CE": return "ITM" if strike < future_price else "OTM"
+        elif option_type == "PE": return "ITM" if strike > future_price else "OTM"
     except: pass
     return None
 
-# ===============================
-# BIAS LOGIC
-# ===============================
 def get_bias_label(net_lots):
     if net_lots > 1500: return "🔥 VERY STRONG BULLISH"
     elif net_lots > 500: return "🚀 STRONG BULLISH"
@@ -63,9 +50,6 @@ def get_bias_label(net_lots):
     elif net_lots < 0: return "🔴 Mild Bearish"
     else: return "⚖ Neutral"
 
-# ===============================
-# PARSE ALERT
-# ===============================
 def parse_alert(text):
     text_upper = text.upper()
     symbol_match = re.search(r"SYMBOL:\s*([\w-]+)", text_upper)
@@ -83,10 +67,8 @@ def parse_alert(text):
     base_symbol = next((s for s in TRACK_SYMBOLS if s in symbol_full), None)
     if not base_symbol: return None
 
-    # Strike extraction
     opt_match = re.search(r"(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\d{2}(\d+)(?:CE|PE)$", symbol_full)
-    zone = None
-    option_type = None
+    zone, option_type = None, None
 
     if opt_match and future_price:
         strike = opt_match.group(1)
@@ -111,32 +93,30 @@ def parse_alert(text):
     if not action_type: return None
 
     return {
-        "symbol": base_symbol,
-        "lots": lots,
-        "zone": zone,
-        "action_type": action_type,
-        "future": future_price,
-        "price": price
+        "symbol": base_symbol, "lots": lots, "zone": zone,
+        "action_type": action_type, "future": future_price, "price": price
     }
 
-# ===============================
-# TELEGRAM HANDLER
-# ===============================
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.channel_post or update.message
     if msg and msg.text and str(msg.chat_id) == str(TARGET_CHANNEL_ID):
         parsed = parse_alert(msg.text)
-        if parsed: alerts_buffer.append(parsed)
+        if parsed:
+            alerts_buffer.append({"data": parsed, "time": datetime.now()})
 
-# ===============================
-# SUMMARY PROCESS (15 MIN VERSION)
-# ===============================
-async def process_summary(context: ContextTypes.DEFAULT_TYPE):
+async def run_report(context: ContextTypes.DEFAULT_TYPE, minutes: int):
     global alerts_buffer
-    if not alerts_buffer: return
+    now = datetime.now()
+    cutoff = now - timedelta(minutes=minutes)
+    
+    # Filter alerts within the timeframe
+    batch = [a["data"] for a in alerts_buffer if a["time"] > cutoff]
+    
+    # Auto-cleanup buffer (remove alerts older than 2 hours to save memory)
+    cleanup_cutoff = now - timedelta(hours=2)
+    alerts_buffer = [a for a in alerts_buffer if a["time"] > cleanup_cutoff]
 
-    batch = list(alerts_buffer)
-    alerts_buffer.clear()
+    if not batch: return
 
     opt_data = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
     opt_turn = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
@@ -149,22 +129,22 @@ async def process_summary(context: ContextTypes.DEFAULT_TYPE):
         lot_size = LOT_SIZES.get(sym, 1)
         if alert["future"]: last_future[sym] = alert["future"]
 
-        if zone: # Option
+        if zone:
             opt_data[sym][act][zone] += lots
             if "WRITER" in act or "_SC" in act:
                 multiplier = 100000 if zone == "ITM" else 50000
                 opt_turn[sym][act][zone] += (lots * multiplier)
             else:
                 if price: opt_turn[sym][act][zone] += (lots * price * lot_size)
-        else: # Future
+        else:
             fut_data[sym][act] += lots
             fut_turn[sym][act] += (lots * 100000)
 
-    message = "<pre>\n📊 15 MIN INSTITUTIONAL FLOW REPORT\n\n"
+    timeframe_label = f"{minutes} MIN" if minutes < 60 else f"{minutes//60} HOUR"
+    message = f"<pre>\n📊 {timeframe_label} INSTITUTIONAL FLOW REPORT\n\n"
 
     for symbol in TRACK_SYMBOLS:
         if symbol not in opt_data and symbol not in fut_data: continue
-
         message += f"💎 {symbol} (FUT: {last_future.get(symbol,'N/A')})\n"
         
         if symbol in opt_data:
@@ -180,46 +160,49 @@ async def process_summary(context: ContextTypes.DEFAULT_TYPE):
                 if act in ["PUT_WRITER","CALL_BUY","CALL_SC","PUT_UNW"]: s_bull_lots += tot_l
                 else: s_bear_lots += tot_l
                 
-                itm_str = f"{itm_l}({format_money(itm_t)})"
-                otm_str = f"{otm_l}({format_money(otm_t)})"
-                tot_str = f"{tot_l}({format_money(tot_t)})"
+                itm_str, otm_str, tot_str = f"{itm_l}({format_money(itm_t)})", f"{otm_l}({format_money(otm_t)})", f"{tot_l}({format_money(tot_t)})"
                 message += f"{act[:10]:10}{itm_str:>15}{otm_str:>15}{tot_str:>15}\n"
             
-            opt_net = s_bull_lots - s_bear_lots
             message += "-" * 55 + "\n"
-            message += f"Option Bias: {get_bias_label(opt_net)}\n"
+            message += f"Option Bias: {get_bias_label(s_bull_lots - s_bear_lots)}\n"
             message += f"Option Turn: {format_money(s_turnover)}\n\n"
 
         if symbol in fut_data:
             message += "--- FUTURES FLOW ---\n"
             f_bull_lots, f_bear_lots, f_turnover = 0, 0, 0
             for act in fut_data[symbol]:
-                lots = fut_data[symbol][act]
-                turn = fut_turn[symbol][act]
+                lots, turn = fut_data[symbol][act], fut_turn[symbol][act]
                 f_turnover += turn
                 if act in ["FUTURE_BUY", "FUTURE_SC"]: f_bull_lots += lots
                 else: f_bear_lots += lots
                 message += f"{act:12} : {lots} lots ({format_money(turn)})\n"
             
-            fut_net = f_bull_lots - f_bear_lots
-            message += f"Future Bias: {get_bias_label(fut_net)}\n"
+            message += f"Future Bias: {get_bias_label(f_bull_lots - f_bear_lots)}\n"
             message += f"Future Turn: {format_money(f_turnover)}\n"
         
         message += "=" * 55 + "\n\n"
 
-    message += "Validity: Next 15 Minutes\n"
+    message += f"Validity: Next {timeframe_label}\n"
     message += "</pre>"
 
     await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=message, parse_mode="HTML")
 
-# ===============================
-# MAIN
-# ===============================
+# Helper functions for the job queue
+async def report_15m(c): await run_report(c, 15)
+async def report_30m(c): await run_report(c, 30)
+async def report_60m(c): await run_report(c, 60)
+async def report_120m(c): await run_report(c, 120)
+
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
+    
     if app.job_queue:
-        app.job_queue.run_repeating(process_summary, interval=900, first=10)
+        app.job_queue.run_repeating(report_15m, interval=900, first=10)
+        app.job_queue.run_repeating(report_30m, interval=1800, first=20)
+        app.job_queue.run_repeating(report_60m, interval=3600, first=30)
+        app.job_queue.run_repeating(report_120m, interval=7200, first=40)
+        
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
