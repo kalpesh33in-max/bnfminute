@@ -198,10 +198,17 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
     
     if app.job_queue:
-        app.job_queue.run_repeating(report_15m, interval=900, first=10)
-        app.job_queue.run_repeating(report_30m, interval=1800, first=20)
-        app.job_queue.run_repeating(report_60m, interval=3600, first=30)
-        app.job_queue.run_repeating(report_120m, interval=7200, first=40)
+        # 15m report starts in 15 mins and repeats every 15 mins
+        app.job_queue.run_repeating(report_15m, interval=900, first=900)
+        
+        # 30m report starts in 30 mins and repeats every 30 mins
+        app.job_queue.run_repeating(report_30m, interval=1800, first=1800)
+        
+        # 1h report starts in 1 hour and repeats every 1 hour
+        app.job_queue.run_repeating(report_60m, interval=3600, first=3600)
+        
+        # 2h report starts in 2 hours and repeats every 2 hours
+        app.job_queue.run_repeating(report_120m, interval=7200, first=7200)
         
     app.run_polling(drop_pending_updates=True)
 
