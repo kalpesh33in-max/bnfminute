@@ -1,6 +1,7 @@
 import os
 import re
 import logging
+import sys
 import pytz
 from datetime import datetime, timedelta, time
 from collections import defaultdict
@@ -12,6 +13,7 @@ IST = pytz.timezone('Asia/Kolkata')
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO,
+    stream=sys.stdout  # Redirect logs to stdout
 )
 
 BOT_TOKEN = os.getenv("SUMMARIZER_BOT_TOKEN")
