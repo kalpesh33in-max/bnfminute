@@ -1,11 +1,14 @@
 import os
 import re
 import logging
-from datetime import datetime, timedelta
+import pytz
+from datetime import datetime, timedelta, time
 from collections import defaultdict
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
+# --- CONFIGURATION ---
+IST = pytz.timezone('Asia/Kolkata')
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -100,20 +103,30 @@ def parse_alert(text):
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.channel_post or update.message
     if msg and msg.text and str(msg.chat_id) == str(TARGET_CHANNEL_ID):
-        parsed = parse_alert(msg.text)
-        if parsed:
-            alerts_buffer.append({"data": parsed, "time": datetime.now()})
+        # Collect messages during market hours (9:00 AM - 3:30 PM IST)
+        now_ist = datetime.now(IST).time()
+        if now_ist >= time(9, 0) and now_ist <= time(15, 30):
+            parsed = parse_alert(msg.text)
+            if parsed:
+                alerts_buffer.append({"data": parsed, "time": datetime.now(IST)})
 
 async def run_report(context: ContextTypes.DEFAULT_TYPE, minutes: int):
     global alerts_buffer
-    now = datetime.now()
-    cutoff = now - timedelta(minutes=minutes)
+    now_ist = datetime.now(IST)
+    
+    # Restrict reports to Market Hours (9:15 AM - 3:30 PM IST)
+    current_time = now_ist.time()
+    if current_time < time(9, 15) or current_time > time(15, 30):
+        return
+
+    cutoff = now_ist - timedelta(minutes=minutes)
+    timeframe_label = f"{minutes} MIN" if minutes < 60 else f"{minutes//60} HOUR"
     
     # Filter alerts within the timeframe
     batch = [a["data"] for a in alerts_buffer if a["time"] > cutoff]
     
-    # Auto-cleanup buffer (remove alerts older than 2 hours to save memory)
-    cleanup_cutoff = now - timedelta(hours=2)
+    # Auto-cleanup buffer (remove alerts older than 3 hours to save memory)
+    cleanup_cutoff = now_ist - timedelta(hours=3)
     alerts_buffer = [a for a in alerts_buffer if a["time"] > cleanup_cutoff]
 
     if not batch: return
@@ -140,7 +153,6 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE, minutes: int):
             fut_data[sym][act] += lots
             fut_turn[sym][act] += (lots * 100000)
 
-    timeframe_label = f"{minutes} MIN" if minutes < 60 else f"{minutes//60} HOUR"
     message = f"<pre>\n📊 {timeframe_label} INSTITUTIONAL FLOW REPORT\n\n"
 
     for symbol in TRACK_SYMBOLS:
@@ -153,10 +165,10 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE, minutes: int):
             message += "-" * 55 + "\n"
             s_bull_lots, s_bear_lots = 0, 0
             s_bull_turnover, s_bear_turnover = 0, 0
-            for act in opt_data[symbol]:
+            for act in sorted(opt_data[symbol].keys()):
                 itm_l, otm_l = opt_data[symbol][act]["ITM"], opt_data[symbol][act]["OTM"]
                 itm_t, otm_t = opt_turn[symbol][act]["ITM"], opt_turn[symbol][act]["OTM"]
-                tot_l, tot_t = itm_l + otm_l, itm_t + otm_t
+                tot_l, tot_t = itm_l + otm_l, itm_t + tot_t
                 
                 if act in ["PUT_WRITER","CALL_BUY","CALL_SC","PUT_UNW"]: 
                     s_bull_lots += tot_l
@@ -177,7 +189,7 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE, minutes: int):
             message += "--- FUTURES FLOW ---\n"
             f_bull_lots, f_bear_lots = 0, 0
             f_bull_turnover, f_bear_turnover = 0, 0
-            for act in fut_data[symbol]:
+            for act in sorted(fut_data[symbol].keys()):
                 lots, turn = fut_data[symbol][act], fut_turn[symbol][act]
                 if act in ["FUTURE_BUY", "FUTURE_SC"]: 
                     f_bull_lots += lots
@@ -198,29 +210,28 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE, minutes: int):
 
     await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=message, parse_mode="HTML")
 
-# Helper functions for the job queue
+# Job Wrappers
 async def report_15m(c): await run_report(c, 15)
 async def report_30m(c): await run_report(c, 30)
 async def report_60m(c): await run_report(c, 60)
 async def report_120m(c): await run_report(c, 120)
 
 def main():
+    if not BOT_TOKEN:
+        print("Error: SUMMARIZER_BOT_TOKEN not set.")
+        return
+        
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
     
     if app.job_queue:
-        # 15m report starts in 15 mins and repeats every 15 mins
-        app.job_queue.run_repeating(report_15m, interval=900, first=900)
+        # Schedule reports to repeat every interval, starting from 9:15 AM IST
+        app.job_queue.run_repeating(report_15m, interval=900, first=time(9, 15, tzinfo=IST))
+        app.job_queue.run_repeating(report_30m, interval=1800, first=time(9, 15, tzinfo=IST))
+        app.job_queue.run_repeating(report_60m, interval=3600, first=time(9, 15, tzinfo=IST))
+        app.job_queue.run_repeating(report_120m, interval=7200, first=time(9, 15, tzinfo=IST))
         
-        # 30m report starts in 30 mins and repeats every 30 mins
-        app.job_queue.run_repeating(report_30m, interval=1800, first=1800)
-        
-        # 1h report starts in 1 hour and repeats every 1 hour
-        app.job_queue.run_repeating(report_60m, interval=3600, first=3600)
-        
-        # 2h report starts in 2 hours and repeats every 2 hours
-        app.job_queue.run_repeating(report_120m, interval=7200, first=7200)
-        
+    print(f"Bot is starting. Operating in IST ({datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')})")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
