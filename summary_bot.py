@@ -34,8 +34,8 @@ LOT_SIZES = {
 }
 
 def format_money(value):
-    if value >= 1e7: return f"{value/1e7:.2f}Cr"
-    elif value >= 1e5: return f"{value/1e5:.2f}L"
+    if value >= 1e7: return f"{value/1e7:.1f}Cr"
+    elif value >= 1e5: return f"{value/1e5:.1f}L"
     else: return f"{value:.0f}"
 
 def classify_strike(strike, option_type, future_price):
@@ -153,9 +153,9 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE, minutes: int):
         
         if symbol in opt_data:
             message += "--- OPTIONS FLOW ---\n"
-            # Spacing set to 10, 13, 13, 13
-            message += f"{'TYPE':10}{'ITM':>13}{'OTM':>13}{'TOT':>13}\n"
-            message += "-" * 49 + "\n"
+            # Spacing set to 8, 14, 14, 14 (Total 50)
+            message += f"{'TYPE':8}{'ITM':>14}{'OTM':>14}{'TOT':>14}\n"
+            message += "-" * 50 + "\n"
             
             s_bull_lots, s_bear_lots = 0, 0
             s_bull_turnover, s_bear_turnover = 0, 0
@@ -178,9 +178,9 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE, minutes: int):
                 tot_s = f"{tot_l}({format_money(tot_t)})"
                 
                 display_act = act.replace("CALL_WRITER","CALL_WR").replace("PUT_WRITER","PUT_WR").replace("SHORT_COVERING","SC").replace("LONG_UNWINDING","UNW")
-                message += f"{display_act[:10]:10}{itm_s:>13}{otm_s:>13}{tot_s:>13}\n"
+                message += f"{display_act[:8]:8}{itm_s:>14}{otm_s:>14}{tot_s:>14}\n"
             
-            message += "-" * 49 + "\n"
+            message += "-" * 50 + "\n"
             message += f"Option Bias: {get_bias_label(s_bull_lots - s_bear_lots)}\n"
             message += f"Bullish Turn: {format_money(s_bull_turnover)}\n"
             message += f"Bearish Turn: {format_money(s_bear_turnover)}\n\n"
