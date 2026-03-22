@@ -87,10 +87,10 @@ def parse_alert(text):
     elif "CALL BUY" in text_upper: action_type = "CALL_BUY"
     elif "PUT BUY" in text_upper: action_type = "PUT_BUY"
     elif "SHORT COVERING" in text_upper:
-        if symbol_full.endswith("-I"): action_type = "FUTURE_SC"
+        if "-I" in symbol_full or "FUT" in symbol_full: action_type = "FUTURE_SC"
         else: action_type = "CALL_SC" if option_type == "CE" else "PUT_SC"
     elif "LONG UNWINDING" in text_upper:
-        if symbol_full.endswith("-I"): action_type = "FUTURE_UNW"
+        if "-I" in symbol_full or "FUT" in symbol_full: action_type = "FUTURE_UNW"
         else: action_type = "CALL_UNW" if option_type == "CE" else "PUT_UNW"
     elif "FUTURE BUY" in text_upper: action_type = "FUTURE_BUY"
     elif "FUTURE SELL" in text_upper: action_type = "FUTURE_SELL"
