@@ -135,13 +135,14 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE, minutes: int):
         lot_size = LOT_SIZES.get(sym, 1)
         if alert["future"]: last_future[sym] = alert["future"]
 
-        if zone:
-            opt_data[sym][act][zone] += lots
+        if "FUTURE" not in act: # STRICT OPTION CHECK
+            z = zone if zone else "OTM" # Safety default
+            opt_data[sym][act][z] += lots
             if "WRITER" in act or "_SC" in act:
-                opt_turn[sym][act][zone] += (lots * 125000)
+                opt_turn[sym][act][z] += (lots * 125000)
             else:
-                if price: opt_turn[sym][act][zone] += (lots * price * lot_size)
-        else:
+                if price: opt_turn[sym][act][z] += (lots * price * lot_size)
+        else: # STRICT FUTURE CHECK
             fut_data[sym][act] += lots
             fut_turn[sym][act] += (lots * 175000)
 
