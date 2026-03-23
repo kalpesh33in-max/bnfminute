@@ -123,6 +123,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def run_report(context: ContextTypes.DEFAULT_TYPE, minutes: int):
     global alerts_buffer
     now = datetime.now(IST)
+    
+    # MARKET HOURS CHECK (9:15 AM to 3:30 PM IST)
+    current_time_int = now.hour * 100 + now.minute
+    if current_time_int < 915 or current_time_int > 1530:
+        logging.info(f"⏳ Market Closed ({now.strftime('%H:%M')}). Skipping report.")
+        return
+
     cutoff = now - timedelta(minutes=minutes)
     
     # Filter data for the specific timeframe
