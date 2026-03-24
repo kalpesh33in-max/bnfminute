@@ -238,7 +238,7 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
             
             message += "-" * 50 + "\n"
             
-            # CORRECTED CLASSIFICATION logic for Bias
+            # --- PERFECT BIAS LOGIC ---
             s_bull_lots, s_bear_lots = 0, 0
             s_bull_turnover, s_bear_turnover = 0, 0
             for act in opt_data[symbol]:
@@ -246,12 +246,12 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
                 itm_t, otm_t = opt_turn[symbol][act]["ITM"], opt_turn[symbol][act]["OTM"]
                 tot_l, tot_t = itm_l + otm_l, itm_t + otm_t
                 
-                # Bullish Actions: PUT WRITER, CALL BUY, CALL SHORT COVERING, PUT UNWINDING
+                # BULLISH ACTIONS
                 if act in ["PUT_WRITER", "CALL_BUY", "CALL_SC", "PUT_UNW"]: 
                     s_bull_lots += tot_l
                     s_bull_turnover += tot_t
-                # Bearish Actions: CALL WRITER, PUT BUY, PUT SHORT COVERING, CALL UNWINDING
-                else: 
+                # BEARISH ACTIONS
+                elif act in ["CALL_WRITER", "PUT_BUY", "PUT_SC", "CALL_UNW"]: 
                     s_bear_lots += tot_l
                     s_bear_turnover += tot_t
 
@@ -265,12 +265,15 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
             f_bull_turnover, f_bear_turnover = 0, 0
             for act in fut_data[symbol]:
                 lots, turn = fut_data[symbol][act], fut_turn[symbol][act]
+                # FUTURE BULLISH: BUY and SHORT COVERING
                 if act in ["FUTURE_BUY", "FUTURE_SC"]: 
                     f_bull_lots += lots
                     f_bull_turnover += turn
-                else: 
+                # FUTURE BEARISH: SELL and LONG UNWINDING
+                elif act in ["FUTURE_SELL", "FUTURE_UNW"]: 
                     f_bear_lots += lots
                     f_bear_turnover += turn
+                
                 message += f"{act:12} : {lots} lots ({format_money(turn)})\n"
             
             message += f"Future Bias: {get_bias_label(f_bull_lots - f_bear_lots)}\n"
