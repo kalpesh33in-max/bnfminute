@@ -10,6 +10,23 @@ from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
 # --- CONFIGURATION ---
 IST = pytz.timezone('Asia/Kolkata')
+REPORT_SEQUENCE = [
+    15, 15, 30, 
+    15, 15, 60, 
+    15, 15, 90, 
+    15, 15, 120, 
+    15, 15, 150, 
+    15, 15, 180, 
+    15, 15, 210, 
+    15, 15, 240, 
+    15, 15, 270, 
+    15, 15, 300, 
+    15, 15, 330, 
+    15, 15, 360, 
+    375
+]
+current_seq_index = 0
+last_report_date = None
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -120,26 +137,45 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if parsed:
             alerts_buffer.append((parsed, datetime.now(IST)))
 
-async def run_report(context: ContextTypes.DEFAULT_TYPE, minutes: int):
-    global alerts_buffer
+async def run_report(context: ContextTypes.DEFAULT_TYPE):
+    global alerts_buffer, current_seq_index, last_report_date
     now = datetime.now(IST)
     
-    # DEBUG LOG: See exactly what time the bot sees
-    logging.info(f"🕒 Current IST Time: {now.strftime('%H:%M:%S')}")
+    # Reset index every new market day
+    current_date = now.date()
+    if last_report_date != current_date:
+        current_seq_index = 0
+        last_report_date = current_date
+        logging.info(f"🆕 NEW DAY: Resetting Report Sequence Index.")
 
     # MARKET HOURS CHECK (9:15 AM to 3:30 PM IST)
     current_time_int = now.hour * 100 + now.minute
-    if current_time_int < 915 or current_time_int > 1530:
-        logging.info(f"⏳ Market Closed. Skipping {minutes} MIN report.")
+    if current_time_int < 915 or current_time_int > 1545: # Added 15 mins padding for final 3:30 report
         return
+
+    # Fetch duration from sequence
+    if current_seq_index >= len(REPORT_SEQUENCE):
+        logging.info("🛑 Sequence finished for today.")
+        return
+
+    minutes = REPORT_SEQUENCE[current_seq_index]
+    current_seq_index += 1
+
+    logging.info(f"🕒 {now.strftime('%H:%M')} | Sequence Index: {current_seq_index} | Duration: {minutes} MIN")
 
     cutoff = now - timedelta(minutes=minutes)
     
-    # Filter data for the specific timeframe
+    # Filter data
     batch = [a[0] for a in alerts_buffer if a[1] >= cutoff]
     if not batch: return
 
-    timeframe_label = f"{minutes} MIN" if minutes < 60 else f"{minutes//60} HOUR"
+    # Timeframe Labeling (Handles MIN vs HOUR)
+    if minutes < 60:
+        timeframe_label = f"{minutes} MIN"
+    elif minutes % 60 == 0:
+        timeframe_label = f"{minutes//60} HOUR"
+    else:
+        timeframe_label = f"{minutes} MIN"
     
     opt_data = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
     opt_turn = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
@@ -171,7 +207,6 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE, minutes: int):
         
         if symbol in opt_data:
             message += "--- OPTIONS FLOW ---\n"
-            # Spacing set to 8, 14, 14, 14 (Total 50)
             message += f"{'TYPE':8}{'ITM':>14}{'OTM':>14}{'TOT':>14}\n"
             message += "-" * 50 + "\n"
             
@@ -184,7 +219,10 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE, minutes: int):
                 # FIXED: Corrected calculation tot_t = itm_t + otm_t
                 tot_l, tot_t = itm_l + otm_l, itm_t + otm_t
                 
-                if act in ["PUT_WRITER","CALL_BUY","CALL_SC","PUT_UNW"]: 
+                # CORRECTED LOGIC:
+                # Bullish: Put Writing, Call Buying, Call Short Covering, Put Unwinding
+                # Bearish: Call Writing, Put Buying, Put Short Covering, Call Unwinding
+                if act in ["PUT_WRITER", "CALL_BUY", "CALL_SC", "PUT_UNW"]: 
                     s_bull_lots += tot_l
                     s_bull_turnover += tot_t
                 else: 
@@ -195,8 +233,8 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE, minutes: int):
                 otm_s = f"{otm_l}({format_money(otm_t)})"
                 tot_s = f"{tot_l}({format_money(tot_t)})"
                 
-                display_act = act.replace("CALL_WRITER","CALL_WR").replace("PUT_WRITER","PUT_WR").replace("SHORT_COVERING","SC").replace("LONG_UNWINDING","UNW")
-                message += f"{display_act[:8]:8}{itm_s:>14}{otm_s:>14}{tot_s:>14}\n"
+                display_act = act.replace("CALL_WRITER","CALL_WR").replace("PUT_WRITER","PUT_WR")
+                message += f"{display_act:8}{itm_s:>14}{otm_s:>14}{tot_s:>14}\n"
             
             message += "-" * 50 + "\n"
             
@@ -208,10 +246,12 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE, minutes: int):
                 itm_t, otm_t = opt_turn[symbol][act]["ITM"], opt_turn[symbol][act]["OTM"]
                 tot_l, tot_t = itm_l + otm_l, itm_t + otm_t
                 
-                if act in ["PUT_WRITER", "CALL_BUY", "PUT_SC", "CALL_UNW"]: 
+                # Bullish Actions: PUT WRITER, CALL BUY, CALL SHORT COVERING, PUT UNWINDING
+                if act in ["PUT_WRITER", "CALL_BUY", "CALL_SC", "PUT_UNW"]: 
                     s_bull_lots += tot_l
                     s_bull_turnover += tot_t
-                else: # CALL_WRITER, PUT_BUY, CALL_SC, PUT_UNW
+                # Bearish Actions: CALL WRITER, PUT BUY, PUT SHORT COVERING, CALL UNWINDING
+                else: 
                     s_bear_lots += tot_l
                     s_bear_turnover += tot_t
 
@@ -244,12 +284,6 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE, minutes: int):
 
     await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=message, parse_mode="HTML")
 
-# Job Wrappers
-async def report_15m(c): await run_report(c, 15)
-async def report_30m(c): await run_report(c, 30)
-async def report_60m(c): await run_report(c, 60)
-async def report_120m(c): await run_report(c, 120)
-
 def main():
     if not BOT_TOKEN:
         print("Error: SUMMARIZER_BOT_TOKEN not set.")
@@ -259,14 +293,8 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
     
     if app.job_queue:
-        # Every 15 minutes
-        app.job_queue.run_repeating(report_15m, interval=900, first=10)
-        # Every 30 minutes
-        app.job_queue.run_repeating(report_30m, interval=1800, first=20)
-        # Every 60 minutes
-        app.job_queue.run_repeating(report_60m, interval=3600, first=30)
-        # Every 120 minutes
-        app.job_queue.run_repeating(report_120m, interval=7200, first=40)
+        # Every 15 minutes, trigger the report sequencer
+        app.job_queue.run_repeating(run_report, interval=900, first=10)
         
     app.run_polling(drop_pending_updates=True)
 
