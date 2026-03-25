@@ -10,23 +10,9 @@ from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
 # --- CONFIGURATION ---
 IST = pytz.timezone('Asia/Kolkata')
-REPORT_SEQUENCE = [
-    15, 15, 30, 
-    15, 15, 60, 
-    15, 15, 90, 
-    15, 15, 120, 
-    15, 15, 150, 
-    15, 15, 180, 
-    15, 15, 210, 
-    15, 15, 240, 
-    15, 15, 270, 
-    15, 15, 300, 
-    15, 15, 330, 
-    15, 15, 360, 
-    375
-]
-current_seq_index = 0
-last_report_date = None
+# Captures the exact moment the scanner/bot is started or updated
+SESSION_START = datetime.now(IST) 
+
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -43,7 +29,7 @@ alerts_buffer = []
 TRACK_SYMBOLS = ["BANKNIFTY", "HDFCBANK", "ICICIBANK", "AXISBANK", "SBIN"]
 
 LOT_SIZES = {
-    "BANKNIFTY": 30,
+    "BANKNIFTY": 30, # Corrected to 30 as per your instruction
     "HDFCBANK": 550,
     "ICICIBANK": 700,
     "AXISBANK": 625,
@@ -75,7 +61,6 @@ def get_bias_label(net_lots):
 def parse_alert(text):
     text_upper = text.upper()
     
-    # Improved symbol regex to capture symbols with spaces
     symbol_match = re.search(r"SYMBOL:\s*([^\n\r]+)", text_upper)
     lot_match = re.search(r"LOTS:\s*(\d+)", text_upper)
     price_match = re.search(r"PRICE:\s*([\d.]+)", text_upper)
@@ -91,7 +76,6 @@ def parse_alert(text):
     base_symbol = next((s for s in TRACK_SYMBOLS if s in symbol_full), None)
     if not base_symbol: return None
 
-    # Robust Option Match: Finds the strike price (numbers) immediately before CE or PE
     opt_match = re.search(r"(\d+)(CE|PE)$", symbol_full)
     zone, option_type = None, None
 
@@ -138,45 +122,23 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             alerts_buffer.append((parsed, datetime.now(IST)))
 
 async def run_report(context: ContextTypes.DEFAULT_TYPE):
-    global alerts_buffer, current_seq_index, last_report_date
+    global alerts_buffer, SESSION_START
     now = datetime.now(IST)
     
-    # Reset index every new market day
-    current_date = now.date()
-    if last_report_date != current_date:
-        current_seq_index = 0
-        last_report_date = current_date
-        logging.info(f"🆕 NEW DAY: Resetting Report Sequence Index.")
-
-    # MARKET HOURS CHECK (9:15 AM to 3:30 PM IST)
-    current_time_int = now.hour * 100 + now.minute
-    if current_time_int < 915 or current_time_int > 1545: # Added 15 mins padding for final 3:30 report
+    # MARKET HOURS CHECK (9:15 AM to 3:45 PM IST)
+    if now.time() < time(9, 15) or now.time() > time(15, 50):
         return
 
-    # Fetch duration from sequence
-    if current_seq_index >= len(REPORT_SEQUENCE):
-        logging.info("🛑 Sequence finished for today.")
-        return
+    # Calculate cumulative minutes since this script was started/updated
+    duration_mins = int((now - SESSION_START).total_seconds() / 60)
+    if duration_mins < 1: duration_mins = 1
 
-    minutes = REPORT_SEQUENCE[current_seq_index]
-    current_seq_index += 1
+    logging.info(f"🕒 Generating cumulative report for last {duration_mins} minutes.")
 
-    logging.info(f"🕒 {now.strftime('%H:%M')} | Sequence Index: {current_seq_index} | Duration: {minutes} MIN")
-
-    cutoff = now - timedelta(minutes=minutes)
-    
-    # Filter data
-    batch = [a[0] for a in alerts_buffer if a[1] >= cutoff]
+    # Filter data starting from the SESSION_START timestamp
+    batch = [a[0] for a in alerts_buffer if a[1] >= SESSION_START]
     if not batch: return
 
-    # Timeframe Labeling (Handles MIN vs HOUR)
-    if minutes < 60:
-        timeframe_label = f"{minutes} MIN"
-    elif minutes % 60 == 0:
-        timeframe_label = f"{minutes//60} HOUR"
-    else:
-        timeframe_label = f"{minutes} MIN"
-    
     opt_data = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
     opt_turn = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
     fut_data = defaultdict(lambda: defaultdict(int))
@@ -188,18 +150,19 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
         lot_size = LOT_SIZES.get(sym, 1)
         if alert["future"]: last_future[sym] = alert["future"]
 
-        if "FUTURE" not in act: # STRICT OPTION CHECK
-            z = zone if zone else "OTM" # Safety default
+        if "FUTURE" not in act:
+            z = zone if zone else "OTM"
             opt_data[sym][act][z] += lots
             if "WRITER" in act or "_SC" in act:
                 opt_turn[sym][act][z] += (lots * 125000)
             else:
                 if price: opt_turn[sym][act][z] += (lots * price * lot_size)
-        else: # STRICT FUTURE CHECK
+        else:
             fut_data[sym][act] += lots
             fut_turn[sym][act] += (lots * 175000)
 
-    message = f"<pre>\n📊 {timeframe_label} INSTITUTIONAL FLOW REPORT\n\n"
+    message = f"<pre>\n📊 {duration_mins} MIN CUMULATIVE FLOW\n"
+    message += f"Started At: {SESSION_START.strftime('%H:%M')}\n\n"
 
     for symbol in TRACK_SYMBOLS:
         if symbol not in opt_data and symbol not in fut_data: continue
@@ -215,13 +178,9 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
             for act in opt_data[symbol]:
                 itm_l, otm_l = opt_data[symbol][act]["ITM"], opt_data[symbol][act]["OTM"]
                 itm_t, otm_t = opt_turn[symbol][act]["ITM"], opt_turn[symbol][act]["OTM"]
-                
-                # FIXED: Corrected calculation tot_t = itm_t + otm_t
                 tot_l, tot_t = itm_l + otm_l, itm_t + otm_t
                 
-                # CORRECTED LOGIC:
-                # Bullish: Put Writing, Call Buying, Call Short Covering, Put Unwinding
-                # Bearish: Call Writing, Put Buying, Put Short Covering, Call Unwinding
+                # ORIGINAL LOGIC UNCHANGED
                 if act in ["PUT_WRITER", "CALL_BUY", "CALL_SC", "PUT_UNW"]: 
                     s_bull_lots += tot_l
                     s_bull_turnover += tot_t
@@ -232,29 +191,9 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
                 itm_s = f"{itm_l}({format_money(itm_t)})"
                 otm_s = f"{otm_l}({format_money(otm_t)})"
                 tot_s = f"{tot_l}({format_money(tot_t)})"
-                
                 display_act = act.replace("CALL_WRITER","CALL_WR").replace("PUT_WRITER","PUT_WR")
                 message += f"{display_act:8}{itm_s:>14}{otm_s:>14}{tot_s:>14}\n"
             
-            message += "-" * 50 + "\n"
-            
-            # --- PERFECT BIAS LOGIC ---
-            s_bull_lots, s_bear_lots = 0, 0
-            s_bull_turnover, s_bear_turnover = 0, 0
-            for act in opt_data[symbol]:
-                itm_l, otm_l = opt_data[symbol][act]["ITM"], opt_data[symbol][act]["OTM"]
-                itm_t, otm_t = opt_turn[symbol][act]["ITM"], opt_turn[symbol][act]["OTM"]
-                tot_l, tot_t = itm_l + otm_l, itm_t + otm_t
-                
-                # BULLISH ACTIONS
-                if act in ["PUT_WRITER", "CALL_BUY", "CALL_SC", "PUT_UNW"]: 
-                    s_bull_lots += tot_l
-                    s_bull_turnover += tot_t
-                # BEARISH ACTIONS
-                elif act in ["CALL_WRITER", "PUT_BUY", "PUT_SC", "CALL_UNW"]: 
-                    s_bear_lots += tot_l
-                    s_bear_turnover += tot_t
-
             message += f"Option Bias: {get_bias_label(s_bull_lots - s_bear_lots)}\n"
             message += f"Bullish Turn: {format_money(s_bull_turnover)}\n"
             message += f"Bearish Turn: {format_money(s_bear_turnover)}\n\n"
@@ -265,24 +204,19 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
             f_bull_turnover, f_bear_turnover = 0, 0
             for act in fut_data[symbol]:
                 lots, turn = fut_data[symbol][act], fut_turn[symbol][act]
-                # FUTURE BULLISH: BUY and SHORT COVERING
                 if act in ["FUTURE_BUY", "FUTURE_SC"]: 
                     f_bull_lots += lots
                     f_bull_turnover += turn
-                # FUTURE BEARISH: SELL and LONG UNWINDING
                 elif act in ["FUTURE_SELL", "FUTURE_UNW"]: 
                     f_bear_lots += lots
                     f_bear_turnover += turn
-                
                 message += f"{act:12} : {lots} lots ({format_money(turn)})\n"
             
             message += f"Future Bias: {get_bias_label(f_bull_lots - f_bear_lots)}\n"
-            message += f"Bullish Turn: {format_money(f_bull_turnover)}\n"
-            message += f"Bearish Turn: {format_money(f_bear_turnover)}\n"
         
         message += "========================================\n\n"
 
-    message += f"Validity: Next {timeframe_label}\n"
+    message += f"Validity: Next 15 Min\n"
     message += "</pre>"
 
     await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=message, parse_mode="HTML")
@@ -296,8 +230,8 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
     
     if app.job_queue:
-        # Every 15 minutes, trigger the report sequencer
-        app.job_queue.run_repeating(run_report, interval=900, first=10)
+        # Triggers strictly every 15 minutes (900 seconds)
+        app.job_queue.run_repeating(run_report, interval=900, first=900)
         
     app.run_polling(drop_pending_updates=True)
 
