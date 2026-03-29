@@ -122,23 +122,35 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             alerts_buffer.append((parsed, datetime.now(IST)))
 
 async def run_report(context: ContextTypes.DEFAULT_TYPE):
-    global alerts_buffer, SESSION_START
+    global alerts_buffer
     now = datetime.now(IST)
     
-    # MARKET HOURS CHECK (9:15 AM to 3:45 PM IST)
-    if now.time() < time(9, 15) or now.time() > time(15, 50):
+    # STRICT MARKET HOURS CHECK (9:15 AM to 3:45 PM IST)
+    current_time_int = now.hour * 100 + now.minute
+    if current_time_int < 915 or current_time_int > 1545:
+        logging.info("⏳ Market Closed. Skipping Telegram report.")
         return
 
-    # Calculate cumulative minutes since this script was started/updated
-    duration_mins = int((now - SESSION_START).total_seconds() / 60)
+    # DAILY RESET / TODAY ONLY FILTER: 
+    # Remove any alerts that are not from the current calendar day (Today)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    alerts_buffer = [a for a in alerts_buffer if a[1] >= today_start]
+    
+    if not alerts_buffer: 
+        logging.info("📝 No alerts collected for today yet. Waiting...")
+        return
+
+    # Calculate duration and start time based on the oldest alert in the buffer
+    oldest_time = min(a[1] for a in alerts_buffer)
+    start_time_str = oldest_time.strftime("%I:%M %p")
+    duration_mins = int((now - oldest_time).total_seconds() / 60)
     if duration_mins < 1: duration_mins = 1
 
-    logging.info(f"🕒 Generating cumulative report for last {duration_mins} minutes.")
+    logging.info(f"🕒 Generating daily cumulative report ({duration_mins} mins).")
 
-    # Filter data starting from the SESSION_START timestamp
-    batch = [a[0] for a in alerts_buffer if a[1] >= SESSION_START]
-    if not batch: return
-
+    # Process EVERYTHING currently in the buffer (which is now Today only)
+    batch = [a[0] for a in alerts_buffer]
+    
     opt_data = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
     opt_turn = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
     fut_data = defaultdict(lambda: defaultdict(int))
@@ -161,8 +173,8 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
             fut_data[sym][act] += lots
             fut_turn[sym][act] += (lots * 175000)
 
-    message = f"<pre>\n📊 {duration_mins} MIN CUMULATIVE FLOW\n"
-    message += f"Started At: {SESSION_START.strftime('%H:%M')}\n\n"
+    message = f"<pre>\n📊 DAY CUMULATIVE FLOW ({duration_mins} MINS)\n"
+    message += f"Started At: {start_time_str}\n\n"
 
     for symbol in TRACK_SYMBOLS:
         if symbol not in opt_data and symbol not in fut_data: continue
