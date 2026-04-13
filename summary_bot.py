@@ -197,7 +197,7 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
                 otm_s = f"{otm_l}({format_money(otm_t)})"
                 tot_s = f"{tot_l}({format_money(tot_t)})"
                 display_act = act.replace("CALL_WRITER","CALL_WR").replace("PUT_WRITER","PUT_WR")
-                message += f"{display_act:10}{itm_s:>10}{otm_s:>10}{tot_s:>10}\n"
+                message += f"{display_act:10}{itm_s:>14}{otm_s:>14}{tot_s:>14}\n"
             
             net_bias = s_bull_lots - s_bear_lots
             bias_text = get_bias_label(net_bias)
