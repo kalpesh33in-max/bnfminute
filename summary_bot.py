@@ -27,6 +27,16 @@ SUMMARY_CHAT_ID = os.getenv("SUMMARY_CHAT_ID")
 alerts_buffer = []
 
 TRACK_SYMBOLS = ["BANKNIFTY", "HDFCBANK", "ICICIBANK", "AXISBANK", "SBIN"]
+OPTION_DISPLAY_ORDER = [
+    "CALL_WRITER",
+    "CALL_SC",
+    "CALL_BUY",
+    "CALL_UNW",
+    "PUT_BUY",
+    "PUT_UNW",
+    "PUT_WRITER",
+    "PUT_SC",
+]
 
 LOT_SIZES = {
     "BANKNIFTY": 30, # Corrected to 30 as per your instruction
@@ -181,7 +191,9 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
             
             s_bull_lots, s_bear_lots = 0, 0
             s_bull_turnover, s_bear_turnover = 0, 0
-            for act in opt_data[symbol]:
+            ordered_actions = [act for act in OPTION_DISPLAY_ORDER if act in opt_data[symbol]]
+            remaining_actions = [act for act in opt_data[symbol] if act not in OPTION_DISPLAY_ORDER]
+            for act in ordered_actions + remaining_actions:
                 itm_l, otm_l = opt_data[symbol][act]["ITM"], opt_data[symbol][act]["OTM"]
                 itm_t, otm_t = opt_turn[symbol][act]["ITM"], opt_turn[symbol][act]["OTM"]
                 tot_l, tot_t = itm_l + otm_l, itm_t + otm_t
