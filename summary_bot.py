@@ -26,7 +26,7 @@ SUMMARY_CHAT_ID = os.getenv("SUMMARY_CHAT_ID")
 # Buffer stores (parsed_data, timestamp)
 alerts_buffer = []
 
-TRACK_SYMBOLS = ["BANKNIFTY", "HDFCBANK", "ICICIBANK", "AXISBANK", "SBIN"]
+TRACK_SYMBOLS = ["BANKNIFTY", "HDFCBANK", "ICICIBANK", "NIFTY", "SENSEX", "RELIANCE", "MIDCPNIFTY", "FINNIFTY"]
 OPTION_DISPLAY_ORDER = [
     "CALL_WRITER",
     "CALL_SC",
@@ -42,16 +42,22 @@ LOT_SIZES = {
     "BANKNIFTY": 30, # Corrected to 30 as per your instruction
     "HDFCBANK": 550,
     "ICICIBANK": 700,
-    "AXISBANK": 625,
-    "SBIN": 750
+    "NIFTY": 65,
+    "SENSEX": 20,
+    "RELIANCE": 500,
+    "MIDCPNIFTY": 120,
+    "FINNIFTY": 60
 }
 
 NEAR_ITM_RANGE = {
     "BANKNIFTY": 100,
     "HDFCBANK": 5,
     "ICICIBANK": 10,
-    "AXISBANK": 10,
-    "SBIN": 5
+    "NIFTY": 50,
+    "SENSEX": 100,
+    "RELIANCE": 10,
+    "MIDCPNIFTY": 25,
+    "FINNIFTY": 50
 }
 
 def format_money(value):
