@@ -2,6 +2,7 @@
 import re
 import logging
 import sys
+import socket
 import pytz
 from datetime import datetime, timedelta, time
 from collections import defaultdict
@@ -22,6 +23,10 @@ logging.basicConfig(
 BOT_TOKEN = os.getenv("SUMMARIZER_BOT_TOKEN")
 TARGET_CHANNEL_ID = os.getenv("TARGET_CHANNEL_ID")
 SUMMARY_CHAT_ID = os.getenv("SUMMARY_CHAT_ID")
+RAILWAY_DEPLOYMENT_ID = os.getenv("RAILWAY_DEPLOYMENT_ID")
+RAILWAY_SERVICE_ID = os.getenv("RAILWAY_SERVICE_ID")
+RAILWAY_PROJECT_ID = os.getenv("RAILWAY_PROJECT_ID")
+RAILWAY_ENVIRONMENT_ID = os.getenv("RAILWAY_ENVIRONMENT_ID")
 
 # Buffer stores (parsed_data, timestamp)
 alerts_buffer = []
@@ -141,12 +146,32 @@ def parse_alert(text):
         "price": price
     }
 
+async def safe_notify(app: Application, text: str):
+    if not SUMMARY_CHAT_ID:
+        return
+    try:
+        await app.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=text)
+    except Exception:
+        logging.exception("Failed to notify to SUMMARY_CHAT_ID")
+
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.channel_post or update.message
     if msg and msg.text and str(msg.chat_id) == str(TARGET_CHANNEL_ID):
         parsed = parse_alert(msg.text)
         if parsed:
             alerts_buffer.append((parsed, datetime.now(IST)))
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logging.exception("Unhandled error in Telegram handler", exc_info=context.error)
+    if not SUMMARY_CHAT_ID:
+        return
+    try:
+        await context.bot.send_message(
+            chat_id=SUMMARY_CHAT_ID,
+            text=f"ERROR: {type(context.error).__name__}: {context.error}"
+        )
+    except Exception:
+        logging.exception("Failed to send error message to SUMMARY_CHAT_ID")
 
 async def run_report(context: ContextTypes.DEFAULT_TYPE):
     global alerts_buffer
@@ -268,19 +293,35 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=message, parse_mode="HTML")
 
+async def post_init(app: Application):
+    started_at = datetime.now(IST).strftime("%Y-%m-%d %I:%M:%S %p %Z")
+    host = socket.gethostname()
+    deploy = RAILWAY_DEPLOYMENT_ID or "N/A"
+    svc = RAILWAY_SERVICE_ID or "N/A"
+    proj = RAILWAY_PROJECT_ID or "N/A"
+    env = RAILWAY_ENVIRONMENT_ID or "N/A"
+    await safe_notify(
+        app,
+        f"STARTED: {started_at}\nHOST: {host}\nDEPLOY: {deploy}\nSERVICE: {svc}\nPROJECT: {proj}\nENV: {env}",
+    )
+
 def main():
     if not BOT_TOKEN:
         print("Error: SUMMARIZER_BOT_TOKEN not set.")
         return
         
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
+    app.add_error_handler(error_handler)
     
     if app.job_queue:
         # Triggers strictly every 15 minutes (900 seconds)
         app.job_queue.run_repeating(run_report, interval=900, first=900)
         
-    app.run_polling(drop_pending_updates=True)
+    try:
+        app.run_polling(drop_pending_updates=True)
+    except Exception:
+        logging.exception("Fatal error in bot main loop")
 
 if __name__ == "__main__":
     main()
