@@ -28,11 +28,28 @@ RAILWAY_SERVICE_ID = os.getenv("RAILWAY_SERVICE_ID")
 RAILWAY_PROJECT_ID = os.getenv("RAILWAY_PROJECT_ID")
 RAILWAY_ENVIRONMENT_ID = os.getenv("RAILWAY_ENVIRONMENT_ID")
 
+def read_int_env(name, default):
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+SCANNER_INACTIVITY_MINUTES = read_int_env("SCANNER_INACTIVITY_MINUTES", 16)
+
 # Buffer stores (parsed_data, timestamp)
 alerts_buffer = []
+last_alert_at = None
+last_inactivity_notify_at = None
+TELEGRAM_SAFE_MESSAGE_LIMIT = 3500
 
 TRACK_SYMBOLS = ["BANKNIFTY", "HDFCBANK", "ICICIBANK", "NIFTY", "SENSEX", "RELIANCE", "MIDCPNIFTY", "FINNIFTY"]
 TRACK_SYMBOLS_SORTED = sorted(TRACK_SYMBOLS, key=len, reverse=True)
+INDEX_SYMBOLS = ["BANKNIFTY", "NIFTY", "SENSEX", "MIDCPNIFTY", "FINNIFTY"]
+STOCK_SYMBOLS = ["HDFCBANK", "ICICIBANK", "RELIANCE"]
+REPORT_GROUPS = [
+    ("INDEX", INDEX_SYMBOLS),
+    ("STOCK", STOCK_SYMBOLS),
+]
 OPTION_DISPLAY_ORDER = [
     "CALL_WRITER",
     "CALL_SC",
@@ -86,6 +103,38 @@ def get_bias_label(net_lots):
     if net_lots > 0: return "🔥BULLISH 🚀"
     elif net_lots < 0: return "📉BEARISH📉"
     else: return "⚖ Neutral"
+
+def wrap_pre(text):
+    return f"<pre>\n{text.rstrip()}\n</pre>"
+
+def build_report_messages(header, sections):
+    chunks = []
+
+    for group_label, _ in REPORT_GROUPS:
+        group_sections = sections.get(group_label, [])
+        if not group_sections:
+            continue
+
+        current_sections = []
+        for section in group_sections:
+            candidate_sections = current_sections + [section]
+            candidate_body = header + f" | {group_label}" + "\n\n" + "\n\n".join(candidate_sections)
+            if current_sections and len(wrap_pre(candidate_body)) > TELEGRAM_SAFE_MESSAGE_LIMIT:
+                chunks.append((group_label, current_sections))
+                current_sections = [section]
+            else:
+                current_sections = candidate_sections
+
+        if current_sections:
+            chunks.append((group_label, current_sections))
+
+    total = len(chunks)
+    messages = []
+    for idx, (group_label, chunk_sections) in enumerate(chunks, start=1):
+        chunk_header = f"{header} | {group_label}" if total == 1 else f"{header} | {group_label} PART {idx}/{total}"
+        body = chunk_header + "\n\n" + "\n\n".join(chunk_sections)
+        messages.append(wrap_pre(body))
+    return messages
 
 def parse_alert(text):
     text_upper = text.upper()
@@ -155,11 +204,14 @@ async def safe_notify(app: Application, text: str):
         logging.exception("Failed to notify to SUMMARY_CHAT_ID")
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global last_alert_at
     msg = update.channel_post or update.message
     if msg and msg.text and str(msg.chat_id) == str(TARGET_CHANNEL_ID):
         parsed = parse_alert(msg.text)
         if parsed:
-            alerts_buffer.append((parsed, datetime.now(IST)))
+            now = datetime.now(IST)
+            alerts_buffer.append((parsed, now))
+            last_alert_at = now
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logging.exception("Unhandled error in Telegram handler", exc_info=context.error)
@@ -172,6 +224,41 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception:
         logging.exception("Failed to send error message to SUMMARY_CHAT_ID")
+
+async def notify_if_scanner_inactive(context: ContextTypes.DEFAULT_TYPE, now, today_start):
+    global last_inactivity_notify_at
+    if not SUMMARY_CHAT_ID:
+        return
+
+    market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    if last_alert_at and last_alert_at >= today_start:
+        minutes_since_alert = int((now - last_alert_at).total_seconds() / 60)
+        last_seen = last_alert_at.strftime("%I:%M %p")
+    else:
+        minutes_since_alert = int((now - market_open).total_seconds() / 60)
+        last_seen = "NONE TODAY"
+
+    if minutes_since_alert < SCANNER_INACTIVITY_MINUTES:
+        return
+
+    if last_inactivity_notify_at:
+        minutes_since_notify = int((now - last_inactivity_notify_at).total_seconds() / 60)
+        if minutes_since_notify < SCANNER_INACTIVITY_MINUTES:
+            return
+
+    last_inactivity_notify_at = now
+    try:
+        await context.bot.send_message(
+            chat_id=SUMMARY_CHAT_ID,
+            text=(
+                "WARNING: No scanner alerts parsed.\n"
+                f"LAST ALERT: {last_seen}\n"
+                f"INACTIVE: {minutes_since_alert} minutes\n"
+                "ACTION: Check scanner/source channel and restart scanner if stopped."
+            ),
+        )
+    except Exception:
+        logging.exception("Failed to send scanner inactivity warning")
 
 async def run_report(context: ContextTypes.DEFAULT_TYPE):
     global alerts_buffer
@@ -186,6 +273,7 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
     # DAILY RESET / TODAY ONLY FILTER: 
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     alerts_buffer = [a for a in alerts_buffer if a[1] >= today_start]
+    await notify_if_scanner_inactive(context, now, today_start)
     
     if not alerts_buffer: 
         logging.info("📝 No alerts collected for today yet. Waiting...")
@@ -222,16 +310,19 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
             fut_data[sym][act] += lots
             fut_turn[sym][act] += (lots * 175000)
 
-    message = f"<pre>\n📊 DAY CUMULATIVE FLOW:-{start_time_str} to {now.strftime('%I:%M %p')}\n\n"
+    header = f"📊 DAY CUMULATIVE FLOW:-{start_time_str} to {now.strftime('%I:%M %p')}"
+    sections = {group_label: [] for group_label, _ in REPORT_GROUPS}
 
     for symbol in TRACK_SYMBOLS:
         if symbol not in opt_data and symbol not in fut_data: continue
+        group_label = "INDEX" if symbol in INDEX_SYMBOLS else "STOCK"
+        section = ""
         # COMPACT HEADER (Combined Symbol and Options label)
-        message += f"{symbol} ({last_future.get(symbol,'N/A')}) OPTIONS FLOW\n"
+        section += f"{symbol} ({last_future.get(symbol,'N/A')}) OPTIONS FLOW\n"
         
         if symbol in opt_data:
-            message += f"{'TYPE':8}{'ITM':>14}{'OTM':>14}{'TOT':>14}\n"
-            message += "-" * 50 + "\n"
+            section += f"{'TYPE':8}{'ITM':>14}{'OTM':>14}{'TOT':>14}\n"
+            section += "-" * 50 + "\n"
             
             s_bull_lots, s_bear_lots = 0, 0
             s_bull_turnover, s_bear_turnover = 0, 0
@@ -253,15 +344,15 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
                 otm_s = f"{otm_l}({format_money(otm_t)})"
                 tot_s = f"{tot_l}({format_money(tot_t)})"
                 display_act = act.replace("CALL_WRITER","CALL_WR").replace("PUT_WRITER","PUT_WR")
-                message += f"{display_act:10}{itm_s:>14}{otm_s:>14}{tot_s:>14}\n"
+                section += f"{display_act:10}{itm_s:>14}{otm_s:>14}{tot_s:>14}\n"
             
             net_bias = s_bull_lots - s_bear_lots
             bias_text = get_bias_label(net_bias)
-            message += f"Option Bias: {bias_text} {format_money(abs(s_bull_turnover - s_bear_turnover))}\n"
-            message += f"Bull: {format_money(s_bull_turnover)} | Bear: {format_money(s_bear_turnover)}\n"
+            section += f"Option Bias: {bias_text} {format_money(abs(s_bull_turnover - s_bear_turnover))}\n"
+            section += f"Bull: {format_money(s_bull_turnover)} | Bear: {format_money(s_bear_turnover)}\n"
 
         if symbol in fut_data:
-            message += "---- FUTURES FLOW ----\n"
+            section += "---- FUTURES FLOW ----\n"
             f_bull_lots, f_bear_lots = 0, 0
             f_bull_turnover, f_bear_turnover = 0, 0
             
@@ -271,8 +362,8 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
             f_unw = f"{fut_data[symbol].get('FUTURE_UNW', 0)} ({format_money(fut_turn[symbol].get('FUTURE_UNW', 0))})"
             f_sc  = f"{fut_data[symbol].get('FUTURE_SC', 0)} ({format_money(fut_turn[symbol].get('FUTURE_SC', 0))})"
             
-            message += f"F_BUY : {f_buy} == F_SEL : {f_sel}\n"
-            message += f"F_UNW : {f_unw} == F_SC  : {f_sc}\n"
+            section += f"F_BUY : {f_buy} == F_SEL : {f_sel}\n"
+            section += f"F_UNW : {f_unw} == F_SC  : {f_sc}\n"
 
             for act in fut_data[symbol]:
                 lots, turn = fut_data[symbol][act], fut_turn[symbol][act]
@@ -284,14 +375,14 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
                     f_bear_turnover += turn
             
             f_net_turn = abs(f_bull_turnover - f_bear_turnover)
-            message += f"Future Bias: {get_bias_label(f_bull_lots - f_bear_lots)} {format_money(f_net_turn)}\n"
+            section += f"Future Bias: {get_bias_label(f_bull_lots - f_bear_lots)} {format_money(f_net_turn)}\n"
         
-        message += "\n"
+        sections[group_label].append(section.rstrip())
 
-    # Remove the extra trailing newline before closing the pre tag
-    message = message.rstrip() + "\n</pre>"
-
-    await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=message, parse_mode="HTML")
+    report_messages = build_report_messages(header, sections)
+    logging.info("Sending report in %s Telegram message(s).", len(report_messages))
+    for message in report_messages:
+        await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=message, parse_mode="HTML")
 
 async def post_init(app: Application):
     started_at = datetime.now(IST).strftime("%Y-%m-%d %I:%M:%S %p %Z")
