@@ -1,4 +1,4 @@
-k﻿import os
+import os
 import re
 import logging
 import sys
