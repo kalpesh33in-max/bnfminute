@@ -270,6 +270,9 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logging.exception("Unhandled error in Telegram handler", exc_info=context.error)
     if not SUMMARY_CHAT_ID:
         return
+    if not is_market_session():
+        logging.info("Market closed/holiday. Skipping Telegram error notification.")
+        return
     try:
         await context.bot.send_message(
             chat_id=SUMMARY_CHAT_ID,
