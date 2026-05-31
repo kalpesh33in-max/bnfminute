@@ -1,4 +1,4 @@
-import os
+﻿import os
 import re
 import logging
 import sys
@@ -34,7 +34,52 @@ def read_int_env(name, default):
     except (TypeError, ValueError):
         return default
 
+def read_bool_env(name, default=False):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+def read_time_env(name, default):
+    value = os.getenv(name)
+    if not value:
+        return default
+    value = value.strip()
+    for fmt in ("%H:%M", "%H%M"):
+        try:
+            return datetime.strptime(value, fmt).time()
+        except ValueError:
+            pass
+    logging.warning("Ignoring invalid time %s=%r. Use HH:MM.", name, value)
+    return default
+
+def read_holiday_dates(*env_names):
+    raw_values = []
+    for name in env_names:
+        value = os.getenv(name)
+        if value:
+            raw_values.extend(value.split(","))
+
+    holidays = set()
+    for item in raw_values:
+        item = item.strip()
+        if not item:
+            continue
+        for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
+            try:
+                holidays.add(datetime.strptime(item, fmt).date())
+                break
+            except ValueError:
+                pass
+        else:
+            logging.warning("Ignoring invalid holiday date %r. Use YYYY-MM-DD.", item)
+    return holidays
+
 SCANNER_INACTIVITY_MINUTES = read_int_env("SCANNER_INACTIVITY_MINUTES", 16)
+MARKET_OPEN = read_time_env("MARKET_OPEN_TIME", time(9, 15))
+MARKET_CLOSE = read_time_env("MARKET_CLOSE_TIME", time(15, 30))
+MARKET_HOLIDAYS = read_holiday_dates("MARKET_HOLIDAYS", "NSE_HOLIDAYS")
+STARTUP_NOTIFY_MARKET_ONLY = read_bool_env("STARTUP_NOTIFY_MARKET_ONLY", True)
 
 # Buffer stores (parsed_data, timestamp)
 alerts_buffer = []
@@ -60,6 +105,14 @@ OPTION_DISPLAY_ORDER = [
     "PUT_WRITER",
     "PUT_SC",
 ]
+
+def is_market_session(now=None):
+    now = now or datetime.now(IST)
+    if now.weekday() >= 5:
+        return False
+    if now.date() in MARKET_HOLIDAYS:
+        return False
+    return MARKET_OPEN <= now.time() <= MARKET_CLOSE
 
 LOT_SIZES = {
     "BANKNIFTY": 30, # Corrected to 30 as per your instruction
@@ -229,8 +282,15 @@ async def notify_if_scanner_inactive(context: ContextTypes.DEFAULT_TYPE, now, to
     global last_inactivity_notify_at
     if not SUMMARY_CHAT_ID:
         return
+    if not is_market_session(now):
+        return
 
-    market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    market_open = now.replace(
+        hour=MARKET_OPEN.hour,
+        minute=MARKET_OPEN.minute,
+        second=0,
+        microsecond=0,
+    )
     if last_alert_at and last_alert_at >= today_start:
         minutes_since_alert = int((now - last_alert_at).total_seconds() / 60)
         last_seen = last_alert_at.strftime("%I:%M %p")
@@ -264,10 +324,9 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
     global alerts_buffer
     now = datetime.now(IST)
     
-    # STRICT MARKET HOURS CHECK (9:15 AM to 3:45 PM IST)
-    current_time_int = now.hour * 100 + now.minute
-    if current_time_int < 915 or current_time_int > 1545:
-        logging.info("⏳ Market Closed. Skipping Telegram report.")
+    # STRICT MARKET SESSION CHECK (Mon-Fri, non-holiday, configured market time)
+    if not is_market_session(now):
+        logging.info("Market closed/holiday. Skipping Telegram report.")
         return
 
     # DAILY RESET / TODAY ONLY FILTER: 
@@ -385,7 +444,12 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=message, parse_mode="HTML")
 
 async def post_init(app: Application):
-    started_at = datetime.now(IST).strftime("%Y-%m-%d %I:%M:%S %p %Z")
+    now = datetime.now(IST)
+    if STARTUP_NOTIFY_MARKET_ONLY and not is_market_session(now):
+        logging.info("Market closed/holiday. Skipping startup Telegram notification.")
+        return
+
+    started_at = now.strftime("%Y-%m-%d %I:%M:%S %p %Z")
     host = socket.gethostname()
     deploy = RAILWAY_DEPLOYMENT_ID or "N/A"
     svc = RAILWAY_SERVICE_ID or "N/A"
