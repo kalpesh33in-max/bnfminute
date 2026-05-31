@@ -19,6 +19,15 @@ logging.basicConfig(
     level=logging.INFO,
     stream=sys.stdout
 )
+for noisy_logger in (
+    "httpx",
+    "httpcore",
+    "telegram",
+    "telegram.ext",
+    "telegram.request",
+    "apscheduler",
+):
+    logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
 BOT_TOKEN = os.getenv("SUMMARIZER_BOT_TOKEN")
 TARGET_CHANNEL_ID = os.getenv("TARGET_CHANNEL_ID")
@@ -265,13 +274,19 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             now = datetime.now(IST)
             alerts_buffer.append((parsed, now))
             last_alert_at = now
+            logging.info(
+                "Parsed alert: %s %s %s lots=%s",
+                parsed["symbol"],
+                parsed["action_type"],
+                parsed["zone"] or "NA",
+                parsed["lots"],
+            )
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logging.exception("Unhandled error in Telegram handler", exc_info=context.error)
     if not SUMMARY_CHAT_ID:
         return
     if not is_market_session():
-        logging.info("Market closed/holiday. Skipping Telegram error notification.")
         return
     try:
         await context.bot.send_message(
@@ -329,7 +344,6 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
     
     # STRICT MARKET SESSION CHECK (Mon-Fri, non-holiday, configured market time)
     if not is_market_session(now):
-        logging.info("Market closed/holiday. Skipping Telegram report.")
         return
 
     # DAILY RESET / TODAY ONLY FILTER: 
@@ -338,15 +352,12 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
     await notify_if_scanner_inactive(context, now, today_start)
     
     if not alerts_buffer: 
-        logging.info("📝 No alerts collected for today yet. Waiting...")
         return
 
     oldest_time = min(a[1] for a in alerts_buffer)
     start_time_str = oldest_time.strftime("%I:%M %p")
     duration_mins = int((now - oldest_time).total_seconds() / 60)
     if duration_mins < 1: duration_mins = 1
-
-    logging.info(f"🕒 Generating daily cumulative report ({duration_mins} mins).")
 
     batch = [a[0] for a in alerts_buffer]
     
@@ -442,14 +453,13 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
         sections[group_label].append(section.rstrip())
 
     report_messages = build_report_messages(header, sections)
-    logging.info("Sending report in %s Telegram message(s).", len(report_messages))
     for message in report_messages:
         await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=message, parse_mode="HTML")
+    logging.info("Report sent: %s Telegram message(s), duration=%s mins.", len(report_messages), duration_mins)
 
 async def post_init(app: Application):
     now = datetime.now(IST)
     if STARTUP_NOTIFY_MARKET_ONLY and not is_market_session(now):
-        logging.info("Market closed/holiday. Skipping startup Telegram notification.")
         return
 
     started_at = now.strftime("%Y-%m-%d %I:%M:%S %p %Z")
@@ -462,6 +472,7 @@ async def post_init(app: Application):
         app,
         f"STARTED: {started_at}\nHOST: {host}\nDEPLOY: {deploy}\nSERVICE: {svc}\nPROJECT: {proj}\nENV: {env}",
     )
+    logging.info("Summary bot started in market session.")
 
 def main():
     if not BOT_TOKEN:
@@ -477,6 +488,7 @@ def main():
         app.job_queue.run_repeating(run_report, interval=900, first=900)
         
     try:
+        logging.info("Summary bot started.")
         app.run_polling(drop_pending_updates=True)
     except Exception:
         logging.exception("Fatal error in bot main loop")
