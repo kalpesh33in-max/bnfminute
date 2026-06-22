@@ -2504,7 +2504,7 @@ def process_option_logic(name, underlying_data, option_quotes, alerts_list, stat
                     strength = get_strength_label(final_lots, watch["underlying"])
                     action = classify_action(watch["symbol"], oi_chg, p_chg)
                     p_icon = "▲" if p_chg >= 0 else "▼"
-                    alerts_list.append(
+                    alert_text = (
                         f"{strength}\n🚨 {action}\nSymbol: {watch['symbol']}\n"
                         f"EXPIRY: {watch.get('expiry_text', 'NA')}\n"
                         f"━━━━━━━━━━━━━━━\n"
@@ -2513,6 +2513,8 @@ def process_option_logic(name, underlying_data, option_quotes, alerts_list, stat
                         f"EXISTING OI: {watch['start_oi']:,}\nOI CHANGE  : {oi_chg:+,d}\nNEW OI     : {curr_oi:,}\n"
                         f"TIME: {now.strftime('%H:%M:%S')}"
                     )
+                    send_matrix_message(alert_text, is_burst=True) 
+                    send_telegram_message(alert_text, is_burst=True)
                 del active_watches[t_int]
 
         history.append({"time": now, "oi": curr_oi, "price": ltp})
