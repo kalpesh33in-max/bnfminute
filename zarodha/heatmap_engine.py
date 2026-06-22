@@ -3,9 +3,6 @@ import time
 import pandas as pd
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from matrix_utils import send_matrix_message
-from telegram_utils import send_telegram_message
-
 from kite_rate_limiter import kite_historical_data, kite_quote
 from websocket_flow import get_symbol_quotes, get_token_quotes
 
@@ -2430,8 +2427,6 @@ def process_future_burst(symbol, name, ltp, oi, alerts_list, stats=None):
                     f"TIME: {now.strftime('%H:%M:%S')}"
                 )
                 alerts_list.append(alert_text)
-                send_matrix_message(alert_text, is_burst=True)
-                send_telegram_message(alert_text, is_burst=True)
             del active_watches[key]
 
     history.append({"time": now, "oi": oi, "price": ltp})
@@ -2517,8 +2512,6 @@ def process_option_logic(name, underlying_data, option_quotes, alerts_list, stat
                         f"TIME: {now.strftime('%H:%M:%S')}"
                     )
                     alerts_list.append(alert_text)
-                    send_matrix_message(alert_text, is_burst=True)
-                    send_telegram_message(alert_text, is_burst=True)
                 del active_watches[t_int]
 
         history.append({"time": now, "oi": curr_oi, "price": ltp})
