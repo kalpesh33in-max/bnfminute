@@ -98,6 +98,7 @@ weekly_mismatch_setup_rows = []
 
 born_breakout_last_check_time = None
 born_breakout_alert_store = {}
+burst_alert_store = {}
 
 _options_df = None
 _futures_df = None
@@ -2426,7 +2427,9 @@ def process_future_burst(symbol, name, ltp, oi, alerts_list, stats=None):
                     f"EXISTING OI: {watch['start_oi']:,}\nOI CHANGE  : {oi_chg:+,d}\nNEW OI     : {oi:,}\n"
                     f"TIME: {now.strftime('%H:%M:%S')}"
                 )
-                alerts_list.append(alert_text)
+                alert_key = f"FUT:{name}:{watch['symbol']}:{watch['start_oi']}:{watch['start_price']}"
+                if not _burst_alert_recent(alert_key):
+                    alerts_list.append(alert_text)
             del active_watches[key]
 
     history.append({"time": now, "oi": oi, "price": ltp})
@@ -2511,7 +2514,9 @@ def process_option_logic(name, underlying_data, option_quotes, alerts_list, stat
                         f"EXISTING OI: {watch['start_oi']:,}\nOI CHANGE  : {oi_chg:+,d}\nNEW OI     : {curr_oi:,}\n"
                         f"TIME: {now.strftime('%H:%M:%S')}"
                     )
-                    alerts_list.append(alert_text)
+                    alert_key = f"OPT:{name}:{t_int}:{watch['start_oi']}:{watch['start_price']}"
+                    if not _burst_alert_recent(alert_key):
+                        alerts_list.append(alert_text)
                 del active_watches[t_int]
 
         history.append({"time": now, "oi": curr_oi, "price": ltp})
@@ -2541,8 +2546,25 @@ def _reset_burst_state_if_session_changed(session):
     option_history.clear()
     active_watches.clear()
     day_open_oi_store.clear()
+    burst_alert_store.clear()
     _last_burst_session = session
     print(f"Burst state reset for {session.upper()} session.")
+
+
+def _burst_alert_recent(alert_key, cooldown_seconds=120):
+    now = time.time()
+    last_sent = burst_alert_store.get(alert_key)
+    if last_sent and now - last_sent < cooldown_seconds:
+        return True
+
+    burst_alert_store[alert_key] = now
+    if len(burst_alert_store) > 2000:
+        stale_cutoff = now - max(cooldown_seconds, 300)
+        for key, ts in list(burst_alert_store.items()):
+            if ts < stale_cutoff:
+                burst_alert_store.pop(key, None)
+
+    return False
 
 
 def calculate_burst_alerts(kite):

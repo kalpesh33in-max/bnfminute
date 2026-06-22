@@ -7,8 +7,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from env_config import (
-    TELE_CHAT_ID_BN, TELE_TOKEN_BN, MATRIX_ROOM_ID_BN,
-    TELE_CHAT_ID_STOCKS, TELE_TOKEN_STOCKS, MATRIX_ROOM_ID_STOCKS
+    TELE_CHAT_ID_BN, TELE_TOKEN_BN, MATRIX_ROOM_ID_BN
 )
 from heatmap_engine import (
     calculate_burst_alerts,
@@ -182,15 +181,15 @@ def _burst_loop(kite, dispatcher, stop_event):
                     )
                 
                 # stock_alerts: Stock Futures and MCX burst alerts
-                # Destination: Telegram Stocks channel (TELE_CHAT_ID_STOCKS) and Matrix Stocks room (MATRIX_ROOM_ID_STOCKS)
-                for alert in stock_alerts:
-                    print(f"DEBUG: Sending Stock/MCX alert to {TELE_CHAT_ID_STOCKS}")
+                # Destination: Telegram BN channel (TELE_CHAT_ID_BN) and Matrix BN room (MATRIX_ROOM_ID_BN)
+                for alert in dict.fromkeys(stock_alerts):
+                    print(f"DEBUG: Sending Stock/MCX alert to {TELE_CHAT_ID_BN}")
                     dispatcher.send(
                         PRIORITY_BURST,
                         alert,
-                        chat_id=TELE_CHAT_ID_STOCKS,
-                        token=TELE_TOKEN_STOCKS,
-                        room_id=MATRIX_ROOM_ID_STOCKS,
+                        chat_id=TELE_CHAT_ID_BN,
+                        token=TELE_TOKEN_BN,
+                        room_id=MATRIX_ROOM_ID_BN,
                     )
             except Exception as e:
                 print(f"Error in burst scanner loop: {e}")
