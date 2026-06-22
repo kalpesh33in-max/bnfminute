@@ -3,8 +3,8 @@ import time
 import pandas as pd
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from zarodha.matrix_utils import send_matrix_message
-from zarodha.telegram_utils import send_telegram_message
+from matrix_utils import send_matrix_message
+from telegram_utils import send_telegram_message
 
 from kite_rate_limiter import kite_historical_data, kite_quote
 from websocket_flow import get_symbol_quotes, get_token_quotes
@@ -74,8 +74,8 @@ BURST_TRACK_NAMES = NSE_BURST_TRACK_NAMES
 BURST_OPTION_STRIKE_RANGE = 30
 STOCK_BURST_OPTION_STRIKE_RANGE = int(os.getenv("STOCK_BURST_OPTION_STRIKE_RANGE", "10"))
 MCX_BURST_OPTION_STRIKE_RANGE = int(os.getenv("MCX_BURST_OPTION_STRIKE_RANGE", "10"))
-BURST_THRESHOLD_LOTS = 100
-MCX_BURST_THRESHOLD_LOTS = 10
+BURST_THRESHOLD_LOTS = int(os.getenv("BURST_THRESHOLD_LOTS", "200"))
+MCX_BURST_THRESHOLD_LOTS = int(os.getenv("MCX_BURST_THRESHOLD_LOTS", "200"))
 BURST_REST_FALLBACK_CACHE_SECONDS = int(os.getenv("BURST_REST_FALLBACK_CACHE_SECONDS", "3"))
 INDEX_SYMBOL = "NSE:NIFTY BANK"
 INDEX_FUTURE_NAMES = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX", "SENSEX50"}
@@ -170,9 +170,7 @@ def is_burst_underlying(name):
 
 
 def get_burst_threshold(name):
-    if is_mcx_underlying(name):
-        return MCX_BURST_THRESHOLD_LOTS
-    return BURST_THRESHOLD_LOTS
+    return 200
 
 
 def get_burst_option_strike_range(name):
