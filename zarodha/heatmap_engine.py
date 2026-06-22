@@ -3,6 +3,8 @@ import time
 import pandas as pd
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from zarodha.matrix_utils import send_matrix_message
+from zarodha.telegram_utils import send_telegram_message
 
 from kite_rate_limiter import kite_historical_data, kite_quote
 from websocket_flow import get_symbol_quotes, get_token_quotes
