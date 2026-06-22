@@ -2420,7 +2420,7 @@ def process_future_burst(symbol, name, ltp, oi, alerts_list, stats=None):
                     if watch.get("expiry_text")
                     else ""
                 )
-                alerts_list.append(
+                alert_text = (
                     f"{strength}\n🚨 {action}\nSymbol: {watch['symbol']}\n"
                     f"{expiry_line}"
                     f"━━━━━━━━━━━━━━━\n"
@@ -2429,6 +2429,9 @@ def process_future_burst(symbol, name, ltp, oi, alerts_list, stats=None):
                     f"EXISTING OI: {watch['start_oi']:,}\nOI CHANGE  : {oi_chg:+,d}\nNEW OI     : {oi:,}\n"
                     f"TIME: {now.strftime('%H:%M:%S')}"
                 )
+                alerts_list.append(alert_text)
+                send_matrix_message(alert_text, is_burst=True)
+                send_telegram_message(alert_text, is_burst=True)
             del active_watches[key]
 
     history.append({"time": now, "oi": oi, "price": ltp})
@@ -2513,7 +2516,8 @@ def process_option_logic(name, underlying_data, option_quotes, alerts_list, stat
                         f"EXISTING OI: {watch['start_oi']:,}\nOI CHANGE  : {oi_chg:+,d}\nNEW OI     : {curr_oi:,}\n"
                         f"TIME: {now.strftime('%H:%M:%S')}"
                     )
-                    send_matrix_message(alert_text, is_burst=True) 
+                    alerts_list.append(alert_text)
+                    send_matrix_message(alert_text, is_burst=True)
                     send_telegram_message(alert_text, is_burst=True)
                 del active_watches[t_int]
 
