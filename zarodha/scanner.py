@@ -171,7 +171,7 @@ def _burst_loop(kite, dispatcher, stop_event):
                 # All burst alerts: Index, Stock Futures, and MCX
                 # Destination: Telegram BN channel (TELE_CHAT_ID_BN) and Matrix BN room (MATRIX_ROOM_ID_BN)
                 for alert in dict.fromkeys([*bn_alerts, *stock_alerts]):
-                    print(f"DEBUG: Sending Burst alert to {TELE_CHAT_ID_BN}")
+                    print(f"Sending burst alert to {TELE_CHAT_ID_BN}")
                     dispatcher.send(
                         PRIORITY_BURST,
                         alert,

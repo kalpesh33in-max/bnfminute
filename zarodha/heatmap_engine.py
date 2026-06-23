@@ -2566,17 +2566,14 @@ def _burst_alert_recent(alert_key, cooldown_seconds=120):
 
 def calculate_burst_alerts(kite):
     session = get_burst_session()
-    print(f"DEBUG: calculate_burst_alerts session={session}")
     track_names = get_active_burst_names()
     if not track_names:
-        print(f"DEBUG: calculate_burst_alerts - No track names for session={session}")
         _set_burst_quote_status("inactive", "burst session closed")
         return [], []
 
     _reset_burst_state_if_session_changed(session)
 
     fut_symbols = get_burst_futures(kite, track_names)
-    print(f"DEBUG: calculate_burst_alerts - Tracked futures: {fut_symbols}")
     symbols = list(fut_symbols)
     if session == "nse":
         for name in track_names:
