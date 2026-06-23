@@ -54,9 +54,6 @@ STOCK_BURST_NAMES = {
     "TATAMOTORS", "M&M", "MARUTI", "ASHOKLEY", "LT", "SUNPHARMA", "ITC", "HINDUNILVR"
 }
 NSE_BURST_TRACK_NAMES = [
-    "BANKNIFTY",
-    "NIFTY",
-    "MIDCPNIFTY",
     "HDFCBANK", "ICICIBANK", "SBIN", "AXISBANK", "KOTAKBANK", "BAJFINANCE", "BAJAJFINSV",
     "INDUSINDBK", "BANKBARODA", "PNB", "RELIANCE", "ONGC", "NTPC", "POWERGRID",
     "COALINDIA", "BPCL", "GAIL", "INFOSYS", "TCS", "HCLTECH", "WIPRO", "TECHM",
@@ -147,7 +144,7 @@ FIRST_30M_MISMATCH_CANDLE_START_TIME = datetime.strptime("09:15", "%H:%M").time(
 FIRST_30M_MISMATCH_SCAN_START_TIME = datetime.strptime("09:45", "%H:%M").time()
 FIRST_30M_MISMATCH_GAP_THRESHOLD_PCT = float(os.getenv("FIRST_30M_MISMATCH_GAP_THRESHOLD_PCT", "1.0"))
 FIRST_30M_MISMATCH_MIN_VOLUME = int(os.getenv("FIRST_30M_MISMATCH_MIN_VOLUME", "100000"))
-FIRST_30M_MISMATCH_RETRY_SECONDS = 120
+FIRST_30M_MISMATCH_RETRY_SECONDS = 30
 FIRST_30M_OPTION_ITM_COUNT = int(os.getenv("FIRST_30M_OPTION_ITM_COUNT", "4"))
 DAILY_WEEKLY_MISMATCH_MIN_VOLUME = int(os.getenv("DAILY_WEEKLY_MISMATCH_MIN_VOLUME", "1000000"))
 PREVIOUS_DAY_MISMATCH_LOOKBACK_DAYS = int(os.getenv("PREVIOUS_DAY_MISMATCH_LOOKBACK_DAYS", "20"))
@@ -2715,8 +2712,6 @@ def calculate_other_historical_alerts(kite):
         return []
 
     alerts = []
-    alerts.extend(build_previous_day_future_volume_mismatch_alerts(kite))
-    alerts.extend(build_weekly_future_volume_mismatch_alerts(kite))
     alerts.extend(build_stock_future_1hr_s4_alerts(kite))
     alerts.extend(build_weekly_born_breakout_alerts(kite))
     return alerts
