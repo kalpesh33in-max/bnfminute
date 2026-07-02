@@ -1,4 +1,4 @@
-k﻿import os
+﻿import os
 import re
 import logging
 import sys
@@ -96,10 +96,10 @@ last_alert_at = None
 last_inactivity_notify_at = None
 TELEGRAM_SAFE_MESSAGE_LIMIT = 3500
 
-TRACK_SYMBOLS = ["BANKNIFTY", "HDFCBANK", "ICICIBANK", "NIFTY", "SENSEX", "RELIANCE", "MIDCPNIFTY", "FINNIFTY"]
+TRACK_SYMBOLS = ["BANKNIFTY", "HDFCBANK", "ICICIBANK", "BAJFINANCE", "KOTAKBANK", "RELIANCE", "MIDCPNIFTY", "FINNIFTY"]
 TRACK_SYMBOLS_SORTED = sorted(TRACK_SYMBOLS, key=len, reverse=True)
-INDEX_SYMBOLS = ["BANKNIFTY", "NIFTY", "SENSEX", "MIDCPNIFTY", "FINNIFTY"]
-STOCK_SYMBOLS = ["HDFCBANK", "ICICIBANK", "RELIANCE"]
+INDEX_SYMBOLS = ["BANKNIFTY", "MIDCPNIFTY", "FINNIFTY"]
+STOCK_SYMBOLS = ["HDFCBANK", "ICICIBANK", "BAJFINANCE", "KOTAKBANK", "RELIANCE"]
 REPORT_GROUPS = [
     ("INDEX", INDEX_SYMBOLS),
     ("STOCK", STOCK_SYMBOLS),
@@ -114,6 +114,8 @@ OPTION_DISPLAY_ORDER = [
     "PUT_WRITER",
     "PUT_SC",
 ]
+BULLISH_OPTION_ACTIONS = {"PUT_WRITER", "CALL_BUY", "CALL_SC", "PUT_UNW"}
+BEARISH_OPTION_ACTIONS = {"CALL_WRITER", "CALL_UNW", "PUT_BUY", "PUT_SC"}
 
 def is_market_session(now=None):
     now = now or datetime.now(IST)
@@ -127,8 +129,8 @@ LOT_SIZES = {
     "BANKNIFTY": 30, # Corrected to 30 as per your instruction
     "HDFCBANK": 550,
     "ICICIBANK": 700,
-    "NIFTY": 65,
-    "SENSEX": 20,
+    "BAJFINANCE": 750,
+    "KOTAKBANK": 2000,
     "RELIANCE": 500,
     "MIDCPNIFTY": 120,
     "FINNIFTY": 60
@@ -138,8 +140,8 @@ NEAR_ITM_RANGE = {
     "BANKNIFTY": 100,
     "HDFCBANK": 5,
     "ICICIBANK": 10,
-    "NIFTY": 50,
-    "SENSEX": 100,
+    "BAJFINANCE": 10,
+    "KOTAKBANK": 5,
     "RELIANCE": 10,
     "MIDCPNIFTY": 25,
     "FINNIFTY": 50
@@ -161,10 +163,14 @@ def classify_strike(strike, option_type, future_price, symbol=None):
     except: pass
     return None
 
-def get_bias_label(net_lots):
-    if net_lots > 0: return "🔥BULLISH 🚀"
-    elif net_lots < 0: return "📉BEARISH📉"
+def get_bias_label(net_value):
+    if net_value > 0: return "🔥BULLISH 🚀"
+    elif net_value < 0: return "📉BEARISH📉"
     else: return "⚖ Neutral"
+
+def get_turnover_bias(bull_turnover, bear_turnover):
+    net_turnover = bull_turnover - bear_turnover
+    return get_bias_label(net_turnover), abs(net_turnover)
 
 def wrap_pre(text):
     return f"<pre>\n{text.rstrip()}\n</pre>"
@@ -213,7 +219,7 @@ def parse_alert(text):
     price = float(price_match.group(1)) if price_match else None
     future_price = float(future_match.group(1)) if future_match else None
 
-    # Prefer the longest match to avoid substring collisions (e.g. MIDCPNIFTY contains NIFTY).
+    # Prefer the longest match to avoid substring collisions between related symbols.
     base_symbol = next((s for s in TRACK_SYMBOLS_SORTED if s in symbol_full), None)
     if not base_symbol: return None
 
@@ -397,7 +403,6 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
             section += f"{'TYPE':8}{'ITM':>14}{'OTM':>14}{'TOT':>14}\n"
             section += "-" * 50 + "\n"
             
-            s_bull_lots, s_bear_lots = 0, 0
             s_bull_turnover, s_bear_turnover = 0, 0
             ordered_actions = [act for act in OPTION_DISPLAY_ORDER if act in opt_data[symbol]]
             remaining_actions = [act for act in opt_data[symbol] if act not in OPTION_DISPLAY_ORDER]
@@ -406,11 +411,9 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
                 itm_t, otm_t = opt_turn[symbol][act]["ITM"], opt_turn[symbol][act]["OTM"]
                 tot_l, tot_t = itm_l + otm_l, itm_t + otm_t
                 
-                if act in ["PUT_WRITER", "CALL_BUY", "CALL_SC", "PUT_UNW"]: 
-                    s_bull_lots += tot_l
+                if act in BULLISH_OPTION_ACTIONS:
                     s_bull_turnover += tot_t
-                else: 
-                    s_bear_lots += tot_l
+                elif act in BEARISH_OPTION_ACTIONS:
                     s_bear_turnover += tot_t
                 
                 itm_s = f"{itm_l}({format_money(itm_t)})"
@@ -419,16 +422,13 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
                 display_act = act.replace("CALL_WRITER","CALL_WR").replace("PUT_WRITER","PUT_WR")
                 section += f"{display_act:10}{itm_s:>14}{otm_s:>14}{tot_s:>14}\n"
             
-            net_bias = s_bull_lots - s_bear_lots
-            bias_text = get_bias_label(net_bias)
-            section += f"Option Bias: {bias_text} {format_money(abs(s_bull_turnover - s_bear_turnover))}\n"
+            bias_text, net_turnover = get_turnover_bias(s_bull_turnover, s_bear_turnover)
+            section += f"Option Bias: {bias_text} {format_money(net_turnover)}\n"
             section += f"Bull: {format_money(s_bull_turnover)} | Bear: {format_money(s_bear_turnover)}\n"
 
         if symbol in fut_data:
             section += "---- FUTURES FLOW ----\n"
-            f_bull_lots, f_bear_lots = 0, 0
-            f_bull_turnover, f_bear_turnover = 0, 0
-            
+
             # Map specific actions for paired display
             f_buy = f"{fut_data[symbol].get('FUTURE_BUY', 0)} ({format_money(fut_turn[symbol].get('FUTURE_BUY', 0))})"
             f_sel = f"{fut_data[symbol].get('FUTURE_SELL', 0)} ({format_money(fut_turn[symbol].get('FUTURE_SELL', 0))})"
@@ -437,18 +437,6 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
             
             section += f"F_BUY : {f_buy} == F_SEL : {f_sel}\n"
             section += f"F_UNW : {f_unw} == F_SC  : {f_sc}\n"
-
-            for act in fut_data[symbol]:
-                lots, turn = fut_data[symbol][act], fut_turn[symbol][act]
-                if act in ["FUTURE_BUY", "FUTURE_SC"]: 
-                    f_bull_lots += lots
-                    f_bull_turnover += turn
-                elif act in ["FUTURE_SELL", "FUTURE_UNW"]: 
-                    f_bear_lots += lots
-                    f_bear_turnover += turn
-            
-            f_net_turn = abs(f_bull_turnover - f_bear_turnover)
-            section += f"Future Bias: {get_bias_label(f_bull_lots - f_bear_lots)} {format_money(f_net_turn)}\n"
         
         sections[group_label].append(section.rstrip())
 
