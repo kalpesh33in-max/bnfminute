@@ -96,12 +96,12 @@ last_alert_at = None
 last_inactivity_notify_at = None
 TELEGRAM_SAFE_MESSAGE_LIMIT = 3500
 
-TRACK_SYMBOLS = ["BANKNIFTY", "HDFCBANK", "ICICIBANK", "BAJFINANCE", "KOTAKBANK", "RELIANCE", "MIDCPNIFTY", "FINNIFTY"]
+TRACK_SYMBOLS = ["BANKNIFTY", "HDFCBANK", "ICICIBANK", "BAJFINANCE", "KOTAKBANK", "RELIANCE", "INFY", "TCS", "HCLTECH", "TECHM"]
 TRACK_SYMBOLS_SORTED = sorted(TRACK_SYMBOLS, key=len, reverse=True)
-INDEX_SYMBOLS = ["BANKNIFTY", "MIDCPNIFTY", "FINNIFTY"]
+INDEX_SYMBOLS = ["BANKNIFTY", "INFY", "TCS", "HCLTECH", "TECHM"]
 STOCK_SYMBOLS = ["HDFCBANK", "ICICIBANK", "BAJFINANCE", "KOTAKBANK", "RELIANCE"]
 REPORT_GROUPS = [
-    ("INDEX", INDEX_SYMBOLS),
+    ("INDEX/TECH", INDEX_SYMBOLS),
     ("STOCK", STOCK_SYMBOLS),
 ]
 OPTION_DISPLAY_ORDER = [
@@ -132,8 +132,10 @@ LOT_SIZES = {
     "BAJFINANCE": 750,
     "KOTAKBANK": 2000,
     "RELIANCE": 500,
-    "MIDCPNIFTY": 120,
-    "FINNIFTY": 60
+    "INFY": 400,
+    "TCS": 225,
+    "HCLTECH": 400,
+    "TECHM": 600
 }
 
 NEAR_ITM_RANGE = {
@@ -143,8 +145,10 @@ NEAR_ITM_RANGE = {
     "BAJFINANCE": 10,
     "KOTAKBANK": 5,
     "RELIANCE": 10,
-    "MIDCPNIFTY": 25,
-    "FINNIFTY": 50
+    "INFY": 10,
+    "TCS": 10,
+    "HCLTECH": 10,
+    "TECHM": 10
 }
 
 def format_money(value):
@@ -394,7 +398,7 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
 
     for symbol in TRACK_SYMBOLS:
         if symbol not in opt_data and symbol not in fut_data: continue
-        group_label = "INDEX" if symbol in INDEX_SYMBOLS else "STOCK"
+        group_label = "INDEX/TECH" if symbol in INDEX_SYMBOLS else "STOCK"
         section = ""
         # COMPACT HEADER (Combined Symbol and Options label)
         section += f"{symbol} ({last_future.get(symbol,'N/A')}) OPTIONS FLOW\n"
