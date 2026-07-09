@@ -96,13 +96,32 @@ last_alert_at = None
 last_inactivity_notify_at = None
 TELEGRAM_SAFE_MESSAGE_LIMIT = 3500
 
-TRACK_SYMBOLS = ["BANKNIFTY", "HDFCBANK", "ICICIBANK", "BAJFINANCE", "KOTAKBANK", "RELIANCE", "INFY", "TCS", "HCLTECH", "TECHM"]
+TRACK_SYMBOLS = [
+    "BANKNIFTY",
+    "HDFCBANK",
+    "ICICIBANK",
+    "KOTAKBANK",
+    "SBIN",
+    "AXISBANK",
+    "RELIANCE",
+    "BAJFINANCE",
+    "BAJAJFINSERV",
+    "INFY",
+    "TCS",
+    "HCLTECH",
+    "TECHM",
+    "MARUTI",
+    "BAJAJAUTO",
+    "TVSMOTOR",
+    "M&M",
+    "EICHERMOT",
+]
 TRACK_SYMBOLS_SORTED = sorted(TRACK_SYMBOLS, key=len, reverse=True)
-INDEX_SYMBOLS = ["BANKNIFTY", "INFY", "TCS", "HCLTECH", "TECHM"]
-STOCK_SYMBOLS = ["HDFCBANK", "ICICIBANK", "BAJFINANCE", "KOTAKBANK", "RELIANCE"]
 REPORT_GROUPS = [
-    ("INDEX/TECH", INDEX_SYMBOLS),
-    ("STOCK", STOCK_SYMBOLS),
+    ("BANKINDEX", ["BANKNIFTY", "HDFCBANK", "ICICIBANK", "KOTAKBANK", "SBIN", "AXISBANK"]),
+    ("RELIANCE", ["RELIANCE", "BAJFINANCE", "BAJAJFINSERV"]),
+    ("TECH", ["INFY", "TCS", "HCLTECH", "TECHM"]),
+    ("AUTO INDEX", ["MARUTI", "BAJAJAUTO", "TVSMOTOR", "M&M", "EICHERMOT"]),
 ]
 OPTION_DISPLAY_ORDER = [
     "CALL_WRITER",
@@ -161,7 +180,7 @@ def classify_strike(strike, option_type, future_price, symbol=None):
         strike, future_price = float(strike), float(future_price)
         near_range = NEAR_ITM_RANGE.get(symbol, 0)
         if abs(strike - future_price) <= near_range:
-            return "ITM"
+            return "ATM"
         if option_type == "CE": return "ITM" if strike < future_price else "OTM"
         if option_type == "PE": return "ITM" if strike > future_price else "OTM"
     except: pass
@@ -398,13 +417,15 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
 
     for symbol in TRACK_SYMBOLS:
         if symbol not in opt_data and symbol not in fut_data: continue
-        group_label = "INDEX/TECH" if symbol in INDEX_SYMBOLS else "STOCK"
+        group_label = next((label for label, symbols in REPORT_GROUPS if symbol in symbols), None)
+        if not group_label:
+            continue
         section = ""
         # COMPACT HEADER (Combined Symbol and Options label)
         section += f"{symbol} ({last_future.get(symbol,'N/A')}) OPTIONS FLOW\n"
         
         if symbol in opt_data:
-            section += f"{'TYPE':8}{'ITM':>14}{'OTM':>14}{'TOT':>14}\n"
+            section += f"{'TYPE':8}{'ITM':>14}{'ATM':>14}{'TOT':>14}\n"
             section += "-" * 50 + "\n"
             
             s_bull_turnover, s_bear_turnover = 0, 0
@@ -412,8 +433,10 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
             remaining_actions = [act for act in opt_data[symbol] if act not in OPTION_DISPLAY_ORDER]
             for act in ordered_actions + remaining_actions:
                 itm_l, otm_l = opt_data[symbol][act]["ITM"], opt_data[symbol][act]["OTM"]
+                atm_l = opt_data[symbol][act]["ATM"]
                 itm_t, otm_t = opt_turn[symbol][act]["ITM"], opt_turn[symbol][act]["OTM"]
-                tot_l, tot_t = itm_l + otm_l, itm_t + otm_t
+                atm_t = opt_turn[symbol][act]["ATM"]
+                tot_l, tot_t = itm_l + otm_l + atm_l, itm_t + otm_t + atm_t
                 
                 if act in BULLISH_OPTION_ACTIONS:
                     s_bull_turnover += tot_t
@@ -421,7 +444,7 @@ async def run_report(context: ContextTypes.DEFAULT_TYPE):
                     s_bear_turnover += tot_t
                 
                 itm_s = f"{itm_l}({format_money(itm_t)})"
-                otm_s = f"{otm_l}({format_money(otm_t)})"
+                otm_s = f"{atm_l}({format_money(atm_t)})"
                 tot_s = f"{tot_l}({format_money(tot_t)})"
                 display_act = act.replace("CALL_WRITER","CALL_WR").replace("PUT_WRITER","PUT_WR")
                 section += f"{display_act:10}{itm_s:>14}{otm_s:>14}{tot_s:>14}\n"
