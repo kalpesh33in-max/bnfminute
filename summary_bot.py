@@ -494,6 +494,15 @@ def main():
         print("Error: SUMMARIZER_BOT_TOKEN not set.")
         return
         
+    logging.info(
+        "Startup config: TARGET_CHANNEL_ID=%s SUMMARY_CHAT_ID=%s SCANNER_INACTIVITY_MINUTES=%s MARKET_OPEN=%s MARKET_CLOSE=%s",
+        TARGET_CHANNEL_ID or "MISSING",
+        SUMMARY_CHAT_ID or "MISSING",
+        SCANNER_INACTIVITY_MINUTES,
+        MARKET_OPEN.strftime("%H:%M"),
+        MARKET_CLOSE.strftime("%H:%M"),
+    )
+
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
     app.add_error_handler(error_handler)
@@ -501,7 +510,10 @@ def main():
     if app.job_queue:
         # Triggers strictly every 15 minutes (900 seconds)
         app.job_queue.run_repeating(run_report, interval=900, first=900)
-        
+        logging.info("Job queue enabled: repeating report scheduled every 900 seconds.")
+    else:
+        logging.warning("Job queue unavailable: periodic report will not run.")
+    
     try:
         logging.info("Summary bot started.")
         app.run_polling(drop_pending_updates=True)
